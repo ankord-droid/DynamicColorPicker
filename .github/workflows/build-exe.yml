@@ -1,0 +1,64 @@
+name: Build Windows exe
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 numpy opencv-python-headless pynput pywin32 pyinstaller
+
+      - name: Smoke test (import)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "import dynamic_color_picker, csp_companion; print('ok')"
+
+      - name: Build exe
+        shell: pwsh
+        run: |
+          $icon = @()
+          if (Test-Path icon.ico) { $icon = @('--icon', 'icon.ico') }
+          pyinstaller --noconfirm --clean --onefile --windowed `
+            --name DynamicColorPicker @icon `
+            --hidden-import csp_companion `
+            --hidden-import pynput.keyboard._win32 `
+            --hidden-import pynput.mouse._win32 `
+            --hidden-import win32com.client `
+            --exclude-module PySide6.QtWebEngineCore `
+            --exclude-module PySide6.Qt3DCore `
+            --exclude-module PySide6.QtQuick `
+            --exclude-module PySide6.QtQml `
+            --exclude-module PySide6.QtMultimedia `
+            --exclude-module tkinter `
+            dynamic_color_picker.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DynamicColorPicker
+          path: dist/DynamicColorPicker.exe
+
+      - name: Publish "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>$null
+          gh release create latest dist/DynamicColorPicker.exe `
+            --title "Dynamic Color Picker (latest build)" `
+            --notes "Автосборка из коммита ${{ github.sha }}" `
+            --target ${{ github.sha }}
