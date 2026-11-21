@@ -3,6 +3,7 @@ name: Build Windows exe
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -48,6 +49,7 @@ jobs:
             dynamic_color_picker.py
 
       - name: Publish "latest" release
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
@@ -57,3 +59,15 @@ jobs:
             --title "Dynamic Color Picker (latest build)" `
             --notes "Автосборка из коммита ${{ github.sha }}" `
             --target ${{ github.sha }}
+
+      - name: Publish versioned release
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          Copy-Item dist/DynamicColorPicker.exe "dist/DynamicColorPicker-${{ github.ref_name }}.exe"
+          gh release create ${{ github.ref_name }} "dist/DynamicColorPicker-${{ github.ref_name }}.exe" `
+            --title "Dynamic Color Picker ${{ github.ref_name }}" `
+            --notes-file RELEASE_NOTES.md `
+            --latest
