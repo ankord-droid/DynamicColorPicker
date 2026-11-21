@@ -66,8 +66,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          Copy-Item dist/DynamicColorPicker.exe "dist/DynamicColorPicker-${{ github.ref_name }}.exe"
-          gh release create ${{ github.ref_name }} "dist/DynamicColorPicker-${{ github.ref_name }}.exe" `
-            --title "Dynamic Color Picker ${{ github.ref_name }}" `
-            --notes-file RELEASE_NOTES.md `
-            --latest
+          $tag = "${{ github.ref_name }}"
+          $exe = "dist/DynamicColorPicker-$tag.exe"
+          Copy-Item dist/DynamicColorPicker.exe $exe
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $exe --clobber
+            gh release edit $tag --title "Dynamic Color Picker $tag" --notes-file RELEASE_NOTES.md --latest
+          } else {
+            gh release create $tag $exe --title "Dynamic Color Picker $tag" --notes-file RELEASE_NOTES.md --latest
+          }
