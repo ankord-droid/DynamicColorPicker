@@ -2806,9 +2806,14 @@ def main():
     app.setApplicationName("Dynamic Color Picker")
     app.setQuitOnLastWindowClosed(False)
     app.setStyle("Fusion")
+    import dcp_instance
+    if not dcp_instance.handoff(APP_VERSION):
+        return                                   # уже запущена та же или более новая версия — она показана
     w = FloatingPanel()
+    w._instance = dcp_instance.InstanceServer(w)
     w.start()
     app.aboutToQuit.connect(w.save)
+    QTimer.singleShot(800, lambda: dcp_instance.check_replace(w))
     sys.exit(app.exec())
 
 
