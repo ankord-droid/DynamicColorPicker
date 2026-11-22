@@ -972,6 +972,7 @@ class Updater(QObject):
                                                             "User-Agent": "DynamicColorPicker"})
             data = json.load(urllib.request.urlopen(req, timeout=10))
         except Exception as e:
+            __import__("logging").getLogger("dcp").warning("Проверка обновлений: %s", e)
             if manual:
                 self.status.emit(f"Не удалось проверить обновления: {e}")
             return

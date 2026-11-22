@@ -1200,6 +1200,7 @@ class FloatingPanel(QWidget):
         self.updater.available.connect(self._update_available)
         self.updater.status.connect(lambda t: self.tray.showMessage("Dynamic Color Picker", t,
                                                                     QSystemTrayIcon.Information, 4000))
+        self.updater.status.connect(lambda t: __import__("logging").getLogger("dcp").info("Обновления: %s", t))
         self.updater.downloaded.connect(self._update_downloaded)
         if self.cfg.get("update_check", True):
             QTimer.singleShot(4000, self.updater.check)
@@ -1252,6 +1253,12 @@ class FloatingPanel(QWidget):
             b = dict(DEFAULT_BINDINGS)
             self.cfg["bindings"] = b
         self.keys.configure(b, self.cfg.get("suppress_keys", True), self.cfg.get("middle_click", False))
+        import logging
+        lg = logging.getLogger("dcp")
+        if not self.keys.available:
+            lg.warning("pynput недоступен — глобальные горячие клавиши отключены")
+        else:
+            lg.info("Горячие клавиши: %s", {a: combo_name(c) for a, c in b.items() if c})
 
     def _restyle(self):
         self.logo.setStyleSheet(f"color:{LOGO.name()};")
@@ -1431,6 +1438,9 @@ class FloatingPanel(QWidget):
         bk.addAction("Экспорт настроек…", self.export_settings)
         bk.addAction("Импорт настроек…", self.import_settings)
         m.addAction("Проверить обновления", lambda: self.updater.check(manual=True))
+        lg = m.addMenu("Журнал ошибок")
+        lg.addAction("Открыть журнал", self._open_log)
+        lg.addAction("Скопировать отчёт для отправки", self._copy_report)
         m.addSeparator()
         m.addAction(f"Dynamic Color Picker {APP_VERSION}").setEnabled(False)
         m.addAction("Скрыть", self.hide)
@@ -1577,7 +1587,19 @@ class FloatingPanel(QWidget):
         self.tray.hide()
         self.ex.Updater.install(path)
 
+    def _open_log(self):
+        import dcp_log
+        dcp_log.open_log()
+
+    def _copy_report(self):
+        import dcp_log
+        QGuiApplication.clipboard().setText(dcp_log.report_text())
+        self.tray.showMessage("Dynamic Color Picker", "Отчёт скопирован — вставьте его в сообщение.",
+                              QSystemTrayIcon.Information, 3000)
+
     def _csp_status(self, text, ok):
+        import logging
+        logging.getLogger("dcp").info("CSP: %s", text)
         self.dot.setStyleSheet(f"color:{'#2ECC71' if ok else SCROLL.name()}; font-size:9pt;")
         self.dot.setToolTip("CSP: " + text)
 
@@ -2714,6 +2736,8 @@ class EditorDialog(DarkDialog):
 
 # ============================================================== main
 def main():
+    import dcp_log
+    dcp_log.setup()
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setApplicationName("Dynamic Color Picker")
