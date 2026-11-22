@@ -1000,10 +1000,67 @@ def _ver(s):
 
 
 def installed_mode():
+    """Запущены из папки установщика (рядом лежит деинсталлятор Inno Setup)."""
     if not getattr(sys, "frozen", False):
         return False
-    base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "DynamicColorPicker").lower()
-    return os.path.dirname(sys.executable).lower() == base
+    d = os.path.dirname(sys.executable)
+    return any(os.path.exists(os.path.join(d, f"unins00{i}.exe")) for i in range(3))
+
+
+# ============================================================== папка данных
+def move_data_dir(new_dir):
+    """Копирует все данные в new_dir и запоминает её. Старую папку чистит следующий запуск."""
+    from dcp_core import DEFAULT_DIR, LOCATION_FILE, portable_dir
+    import shutil
+    new_dir = os.path.abspath(new_dir)
+    if os.path.normcase(new_dir) == os.path.normcase(APP_DIR):
+        return False
+    os.makedirs(new_dir, exist_ok=True)
+    for name in os.listdir(APP_DIR):
+        if name in ("location.txt", "crash.txt") or name.startswith("log.txt"):
+            continue
+        src, dst = os.path.join(APP_DIR, name), os.path.join(new_dir, name)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+    if os.path.normcase(new_dir) == os.path.normcase(portable_dir()):
+        try:
+            os.remove(LOCATION_FILE)
+        except OSError:
+            pass
+    else:
+        os.makedirs(DEFAULT_DIR, exist_ok=True)
+        with open(LOCATION_FILE, "w", encoding="utf-8") as f:
+            f.write(new_dir)
+    cfg_path = os.path.join(new_dir, "config.json")
+    try:
+        cfg = json.load(open(cfg_path, encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    cfg["cleanup_dir"] = APP_DIR
+    json.dump(cfg, open(cfg_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    return True
+
+
+def cleanup_old_dir(cfg):
+    """Удаляет данные из прежней папки после переноса (кроме указателя location.txt)."""
+    import shutil
+    old = cfg.pop("cleanup_dir", None)
+    if not old or os.path.normcase(old) == os.path.normcase(APP_DIR) or not os.path.isdir(old):
+        return
+    for name in os.listdir(old):
+        if name == "location.txt":
+            continue
+        p = os.path.join(old, name)
+        try:
+            shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+        except OSError:
+            pass
+    try:
+        os.rmdir(old)
+    except OSError:
+        pass
 
 
 class Updater(QObject):

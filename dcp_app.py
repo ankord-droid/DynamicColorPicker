@@ -1198,6 +1198,8 @@ class FloatingPanel(QWidget):
             self.pinned_pos = self.pos()
         import dcp_extras as ex
         self.ex = ex
+        if self.cfg.get("cleanup_dir"):
+            QTimer.singleShot(1500, lambda: ex.cleanup_old_dir(self.cfg))
         self.watcher = ex.AppWatcher(self)
         self.watcher.appChanged.connect(self._on_app)
         self.updater = ex.Updater(self)
@@ -2196,6 +2198,20 @@ class SettingsDialog(DarkDialog):
             self.prof_rows.append((name_w, cb))
         v.addLayout(g)
         v.addWidget(self._note("Панель переключается, когда эта программа становится активной (только Windows)."))
+        v.addWidget(self._head("Папка данных — настройки, палитры, референсы, журнал"))
+        row = QHBoxLayout()
+        self.data_lbl = QLabel(APP_DIR)
+        self.data_lbl.setWordWrap(True)
+        row.addWidget(self.data_lbl, 1)
+        b1 = pill("Изменить…", "ghost")
+        b1.clicked.connect(self._change_data_dir)
+        b2 = pill("Открыть", "ghost")
+        b2.clicked.connect(lambda: __import__("PySide6.QtGui", fromlist=["QDesktopServices"]).QDesktopServices.openUrl(
+            __import__("PySide6.QtCore", fromlist=["QUrl"]).QUrl.fromLocalFile(APP_DIR)))
+        row.addWidget(b1)
+        row.addWidget(b2)
+        v.addLayout(row)
+        v.addWidget(self._note("Портативный режим: создайте папку «dcp-data» рядом с exe — тогда всё хранится в ней."))
         v.addWidget(self._head("Запуск и обновления"))
         self.autostart = QCheckBox("Запускать вместе с Windows")
         self.autostart.setChecked(ex.autostart_enabled())
@@ -2207,6 +2223,30 @@ class SettingsDialog(DarkDialog):
         v.addWidget(self._note(f"Версия {APP_VERSION}. Резервная копия настроек: ☰ → Резервная копия."))
         v.addStretch()
         return w
+
+    def _change_data_dir(self):
+        import dcp_extras as ex
+        d = QFileDialog.getExistingDirectory(self, "Папка для данных Dynamic Color Picker", APP_DIR)
+        if not d:
+            return
+        target = d if os.path.basename(d).lower() in ("dcp-data", "dynamic color picker", "dynamiccolorpicker") \
+            else os.path.join(d, "DynamicColorPicker")
+        if QMessageBox.question(self, "Папка данных", f"Перенести все данные в\n{target}\n\n"
+                                "и перезапустить программу? Старая папка будет очищена.") != QMessageBox.Yes:
+            return
+        try:
+            self.panel.save()
+            if not ex.move_data_dir(target):
+                return
+        except Exception as e:
+            QMessageBox.warning(self, "Папка данных", f"Не удалось перенести данные:\n{e}")
+            return
+        p = self.panel
+        p.save = lambda: None                    # не перезаписывать перенесённые настройки
+        p.keys.stop()
+        p.state.csp.disconnect()
+        p.tray.hide()
+        ex.restart_app()
 
     def _profiles(self):
         out = {}

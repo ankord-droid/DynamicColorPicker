@@ -8,7 +8,31 @@ import csp_companion as cspc
 APP_VERSION = "2.2.1"
 GITHUB_REPO = "ankord-droid/DynamicColorPicker"
 
-APP_DIR = os.path.join(os.path.expanduser("~"), ".dynamic_color_picker")
+DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".dynamic_color_picker")
+LOCATION_FILE = os.path.join(DEFAULT_DIR, "location.txt")     # указатель на выбранную папку данных
+
+
+def portable_dir():
+    """Папка dcp-data рядом с exe — портативный режим (на диск C ничего не пишется)."""
+    base = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(sys.argv[0] or "."))
+    return os.path.join(base, "dcp-data")
+
+
+def _resolve_app_dir():
+    p = portable_dir()
+    if os.path.isdir(p):
+        return p
+    try:
+        path = open(LOCATION_FILE, encoding="utf-8").read().strip()
+        if path:
+            os.makedirs(path, exist_ok=True)
+            return path
+    except OSError:
+        pass
+    return DEFAULT_DIR
+
+
+APP_DIR = _resolve_app_dir()
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
 # ============================================================== color math
