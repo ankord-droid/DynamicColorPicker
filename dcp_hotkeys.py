@@ -28,6 +28,9 @@ ACTIONS = [
     ("cycle_model", "Сменить модель круга (HSV/HSL/V-HSV)"),
     ("add_swatch", "Добавить цвет в набор"),
     ("pin", "Временное закрепление (булавка)"),
+    ("eyedropper", "Пипетка с экрана (с лупой)"),
+    ("pick_under_cursor", "Взять цвет под курсором (мгновенно)"),
+    ("scan_canvas", "Обновить палитру холста"),
 ]
 DEFAULT_BINDINGS = {"call": "vk17+vk18+vk67"}   # Ctrl+Alt+C
 

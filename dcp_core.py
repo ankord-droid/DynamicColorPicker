@@ -5,6 +5,9 @@ from PySide6.QtCore import Qt, Signal, QObject, QTimer
 from PySide6.QtGui import QColor, QImage, QGuiApplication
 import csp_companion as cspc
 
+APP_VERSION = "2.1.0"
+GITHUB_REPO = "ankord-droid/DynamicColorPicker"
+
 APP_DIR = os.path.join(os.path.expanduser("~"), ".dynamic_color_picker")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
@@ -48,6 +51,43 @@ def lab2rgb(lab):
     fz = fy - lab[..., 2] / 200
     xyz = np.stack([_finv(fx), _finv(fy), _finv(fz)], -1) * WHITE
     return _gam(xyz @ M_XYZ2RGB.T)
+
+
+# ----- OKLab / OKLCH (перцептивно ровное смешивание и сдвиги тона)
+_OK_M1 = np.array([[0.4122214708, 0.5363325363, 0.0514459929],
+                   [0.2119034982, 0.6806995451, 0.1073969566],
+                   [0.0883024619, 0.2817188376, 0.6299787005]])
+_OK_M2 = np.array([[0.2104542553, 0.7936177850, -0.0040720468],
+                   [1.9779984951, -2.4285922050, 0.4505937099],
+                   [0.0259040371, 0.7827717662, -0.8086757660]])
+_OK_M2I = np.linalg.inv(_OK_M2)
+_OK_M1I = np.linalg.inv(_OK_M1)
+
+
+def rgb2oklab(rgb):
+    return np.cbrt(_lin(rgb) @ _OK_M1.T) @ _OK_M2.T
+
+
+def oklab2rgb(lab):
+    return _gam((np.asarray(lab, float) @ _OK_M2I.T) ** 3 @ _OK_M1I.T)
+
+
+def oklch_in_gamut(L, C, H):
+    """OKLCH (L 0..1, C, H°) -> sRGB, хрома уменьшается до попадания в гамму."""
+    hr = math.radians(H)
+    lo, hi = 0.0, max(0.0, C)
+    f = lambda c: oklab2rgb(np.array([L, c * math.cos(hr), c * math.sin(hr)]))
+    if in_gamut(f(hi)):
+        return clip3(f(hi))
+    for _ in range(16):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if in_gamut(f(mid)) else (lo, mid)
+    return clip3(f(lo))
+
+
+def rgb2oklch(rgb):
+    L, a, b = rgb2oklab(np.array(rgb, float))
+    return float(L), float(math.hypot(a, b)), float(math.degrees(math.atan2(b, a)) % 360)
 
 
 def lab_L(rgb):
@@ -226,6 +266,7 @@ class ColorState(QObject):
         self.active = "fg"            # fg | bg
         self.transparent = False
         self.history = []
+        self.pinned = []              # закреплённые цвета истории
         self.palettes = {"Default": ["#000000", "#FFFFFF", "#E05A47", "#F2C14E", "#5B8E7D", "#3D5A80"]}
         self.current_palette = "Default"
         self.auto_send = False
@@ -270,10 +311,32 @@ class ColorState(QObject):
 
     def push_history(self):
         hx = to_hex(self.color())
+        if hx in self.pinned:
+            return
         if hx in self.history:
             self.history.remove(hx)
         self.history.insert(0, hx)
         del self.history[40:]
+        self.historyChanged.emit()
+
+    def history_view(self):
+        """Закреплённые цвета первыми, затем недавние."""
+        return [(h, True) for h in self.pinned] + [(h, False) for h in self.history if h not in self.pinned]
+
+    def toggle_pin(self, hx):
+        if hx in self.pinned:
+            self.pinned.remove(hx)
+            if hx not in self.history:
+                self.history.insert(0, hx)
+        else:
+            self.pinned.append(hx)
+        self.historyChanged.emit()
+
+    def remove_history(self, hx):
+        if hx in self.pinned:
+            self.pinned.remove(hx)
+        if hx in self.history:
+            self.history.remove(hx)
         self.historyChanged.emit()
 
 
@@ -344,15 +407,27 @@ def write_palette(path, name, colors):
         open(path, "w").write("\n".join(lines) + "\n")
 
 
-def extract_colors(path, k, accuracy):
-    """k-means в пространстве LAB. accuracy 1..100 → размер выборки и число итераций."""
-    img = QImage(path)
+def qimage_rgb(img, side=None):
+    """QImage -> массив (H, W, 3) float 0..1, по желанию уменьшенный до side."""
+    if side:
+        img = img.scaled(side, side, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    img = img.convertToFormat(QImage.Format_RGB888)
+    w, h, bpl = img.width(), img.height(), img.bytesPerLine()
+    return np.frombuffer(img.constBits(), np.uint8, count=h * bpl).reshape(h, bpl)[:, :w * 3].reshape(h, w, 3) / 255.0
+
+
+def extract_colors(src, k, accuracy, mask=None):
+    """k-means в пространстве LAB. src — путь или QImage. accuracy 1..100 → размер выборки и число итераций."""
+    img = QImage(src) if isinstance(src, str) else src
     if img.isNull():
         return []
     side = int(32 + accuracy / 100 * 352)
-    img = img.scaled(side, side, Qt.KeepAspectRatio, Qt.SmoothTransformation).convertToFormat(QImage.Format_RGB888)
-    w, h, bpl = img.width(), img.height(), img.bytesPerLine()
-    arr = np.frombuffer(img.constBits(), np.uint8, count=h * bpl).reshape(h, bpl)[:, :w * 3].reshape(-1, 3) / 255.0
+    arr = qimage_rgb(img, side)
+    if mask is not None:
+        arr = arr[mask(arr.shape)]
+    arr = arr.reshape(-1, 3)
+    if len(arr) < k:
+        return []
     lab = rgb2lab(arr)
     rng = np.random.default_rng(0)
     # k-means++ init

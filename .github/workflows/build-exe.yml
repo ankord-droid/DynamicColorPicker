@@ -24,19 +24,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install PySide6 numpy opencv-python-headless pynput pywin32 pyinstaller
 
-      - name: Smoke test (import)
+      - name: Smoke test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -c "import dynamic_color_picker, csp_companion; print('ok')"
+        run: python -c "import dcp_app, dcp_extras, csp_companion, dcp_formats, dcp_hotkeys; print('ok', dcp_app.APP_VERSION)"
+
+      - name: Version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = python -c "import ast,re;s=open('dcp_core.py',encoding='utf-8').read();print(re.search(r'APP_VERSION = \"([^\"]+)\"',s).group(1))"
+          "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Build exe
         shell: pwsh
         run: |
-          $icon = @()
-          if (Test-Path icon.ico) { $icon = @('--icon', 'icon.ico') }
           pyinstaller --noconfirm --clean --onefile --windowed `
-            --name DynamicColorPicker @icon `
-            --hidden-import csp_companion `
+            --name DynamicColorPicker --icon icon.ico `
+            --add-data "icon.png;." `
+            --hidden-import dcp_extras `
             --hidden-import pynput.keyboard._win32 `
             --hidden-import pynput.mouse._win32 `
             --hidden-import win32com.client `
@@ -48,17 +54,25 @@ jobs:
             --exclude-module tkinter `
             dynamic_color_picker.py
 
-      - name: Publish "latest" release
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc /Qp "/DMyVer=${{ steps.ver.outputs.version }}" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish "latest" build (prerelease)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           gh release delete latest --yes --cleanup-tag 2>$null
-          gh release create latest dist/DynamicColorPicker.exe `
-            --title "Dynamic Color Picker (latest build)" `
-            --notes "Автосборка из коммита ${{ github.sha }}" `
-            --target ${{ github.sha }}
+          gh release create latest dist/DynamicColorPicker.exe dist/DynamicColorPicker-Setup.exe `
+            --title "Dynamic Color Picker — автосборка ${{ steps.ver.outputs.version }}" `
+            --notes "Автосборка из коммита ${{ github.sha }}. Для обычного использования берите версионный релиз." `
+            --target ${{ github.sha }} --prerelease
 
       - name: Publish versioned release
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
@@ -68,11 +82,13 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $exe = "dist/DynamicColorPicker-$tag.exe"
+          $setup = "dist/DynamicColorPicker-Setup-$tag.exe"
           Copy-Item dist/DynamicColorPicker.exe $exe
+          Copy-Item dist/DynamicColorPicker-Setup.exe $setup
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $exe --clobber
+            gh release upload $tag $exe $setup --clobber
             gh release edit $tag --title "Dynamic Color Picker $tag" --notes-file RELEASE_NOTES.md --latest
           } else {
-            gh release create $tag $exe --title "Dynamic Color Picker $tag" --notes-file RELEASE_NOTES.md --latest
+            gh release create $tag $exe $setup --title "Dynamic Color Picker $tag" --notes-file RELEASE_NOTES.md --latest
           }
