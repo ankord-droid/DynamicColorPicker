@@ -32,8 +32,11 @@ jobs:
       - name: Version
         id: ver
         shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
-          $v = python -c "import ast,re;s=open('dcp_core.py',encoding='utf-8').read();print(re.search(r'APP_VERSION = \"([^\"]+)\"',s).group(1))"
+          $v = (python -c "import dcp_core; print(dcp_core.APP_VERSION)").Trim()
+          if (-not $v) { exit 1 }
           "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Build exe
