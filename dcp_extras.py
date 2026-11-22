@@ -452,36 +452,62 @@ class MixerComp(ui.Comp):
 
 
 # ============================================================== Свет и тень
+LIGHTS = {
+    "neutral": ("Нейтральный", "#FFF4E2", "#3B4A7A"),
+    "sun": ("Полуденное солнце", "#FFF0C8", "#3E5A9A"),
+    "sunset": ("Закат", "#FF9A4D", "#5B3F8C"),
+    "lamp": ("Лампа накаливания", "#FFB86B", "#2F4C7A"),
+    "candle": ("Свеча / костёр", "#FF8A2A", "#3A2A4A"),
+    "moon": ("Луна", "#BFD4FF", "#1C2850"),
+    "overcast": ("Пасмурно", "#E6EAF0", "#5A6470"),
+    "neon": ("Неон", "#4DD2FF", "#7A2B8C"),
+}
+
+
 class LightShadowComp(ui.Comp):
-    """Оттенки для света (светлее, теплее) и тени (темнее, холоднее, чуть насыщеннее) в OKLCH.
-    Колёсико — сила сдвига тона."""
+    """Свет и тень под цвет освещения: блики смешиваются с цветом света, тени — с цветом окружения (OKLab).
+    Колёсико — сила влияния света; клик по заголовку — источник света."""
     KEY = "light_shadow"
-    WARM, COOL = 85.0, 265.0
 
     def __init__(self, app, opts=None):
         super().__init__(app, opts)
         self.opts.setdefault("shift", 1.0)
+        self.opts.setdefault("light", "neutral")
+        self.opts.setdefault("custom", None)      # [свет, тень]
         self.state.changed.connect(lambda _: self.update())
-        self.setToolTip("Свет — теплее и светлее, тень — холоднее и темнее. Колёсико — сила сдвига тона")
+        self.setToolTip("Клик по заголовку — цвет освещения. Колёсико — сила влияния света")
 
     def heightFor(self, w):
         return 72
 
-    @staticmethod
-    def _toward(h, target, deg):
-        d = (target - h + 540) % 360 - 180
-        return h + max(-abs(d), min(abs(d), math.copysign(deg, d)))
+    def _light(self):
+        if self.opts["light"] == "custom" and self.opts["custom"]:
+            return "Свой свет", self.opts["custom"][0], self.opts["custom"][1]
+        return LIGHTS.get(self.opts["light"], LIGHTS["neutral"])
 
     def _rows(self):
-        L, C, H = rgb2oklch(self.state.color())
+        _, lhx, shx = self._light()
+        base = rgb2oklab(np.array(self.state.color()))
+        lc = rgb2oklab(np.array(from_hex(lhx)))
+        sc = rgb2oklab(np.array(from_hex(shx)))
         k = self.opts["shift"]
         lights, shadows = [], []
         for i in range(1, 5):
-            lh = self._toward(H, self.WARM, 6 * i * k) if C > 0.01 else H
-            lights.append(to_hex(oklch_in_gamut(min(0.99, L + 0.065 * i), C * (1 - 0.06 * i), lh)))
-            sh = self._toward(H, self.COOL, 7 * i * k) if C > 0.01 else H
-            shadows.append(to_hex(oklch_in_gamut(max(0.03, L - 0.075 * i), C * (1 + 0.05 * i * k), sh)))
+            w = min(0.85, 0.11 * i * k)
+            L = min(0.985, base[0] + 0.065 * i)
+            ab = base[1:] * (1 - w) + lc[1:] * w
+            lights.append(self._fit(L, ab, chroma_mul=1 - 0.05 * i))
+            w = min(0.8, 0.10 * i * k)
+            L = max(0.03, base[0] - 0.075 * i)
+            ab = base[1:] * (1 - w) + sc[1:] * w
+            shadows.append(self._fit(L, ab, chroma_mul=1 + 0.04 * i))
         return lights, shadows
+
+    @staticmethod
+    def _fit(L, ab, chroma_mul=1.0):
+        C = float(math.hypot(ab[0], ab[1])) * chroma_mul
+        H = math.degrees(math.atan2(ab[1], ab[0])) % 360
+        return to_hex(oklch_in_gamut(float(L), C, H))
 
     def _cells(self):
         w = self.width() - 46
@@ -495,7 +521,11 @@ class LightShadowComp(ui.Comp):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        _label(p, QRectF(0, 0, self.width(), 16), "Свет и тень", ui.DIM)
+        name, lhx, shx = self._light()
+        _label(p, QRectF(16, 0, self.width(), 16), f"Свет и тень · {name}  ▾", ui.DIM)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(lhx))
+        p.drawEllipse(QRectF(0, 3, 10, 10))
         _label(p, QRectF(0, 18, 44, 22), "свет")
         _label(p, QRectF(0, 46, 44, 22), "тень")
         base, rows = self._cells()
@@ -507,6 +537,16 @@ class LightShadowComp(ui.Comp):
                 _chip(p, r, hx, active=hx == cur, rad=4)
 
     def mousePressEvent(self, e):
+        if e.position().y() < 16:
+            m = QMenu(self)
+            for k, (label, lhx, _) in LIGHTS.items():
+                a = m.addAction(("●  " if k == self.opts["light"] else "    ") + label)
+                a.triggered.connect(lambda _=False, k=k: self._set_light(k))
+            m.addSeparator()
+            m.addAction(("●  " if self.opts["light"] == "custom" else "    ") + "Свой: текущий цвет = свет",
+                        self._custom_light)
+            m.exec(e.globalPosition().toPoint())
+            return
         base, rows = self._cells()
         lights, shadows = self._rows()
         for cells, cols in zip(rows, (lights, shadows)):
@@ -514,6 +554,17 @@ class LightShadowComp(ui.Comp):
                 if r.contains(e.position()):
                     self.state.set_color(from_hex(hx), self)
                     return
+
+    def _set_light(self, k):
+        self.opts["light"] = k
+        self.update()
+
+    def _custom_light(self):
+        L, C, H = rgb2oklch(self.state.color())
+        shadow = to_hex(oklch_in_gamut(0.32, min(0.12, C * 0.7 + 0.03), (H + 180) % 360))
+        self.opts["custom"] = [to_hex(self.state.color()), shadow]
+        self.opts["light"] = "custom"
+        self.update()
 
     def adjust(self, step, pos):
         self.opts["shift"] = round(min(3.0, max(0.0, self.opts["shift"] + 0.25 * (1 if step > 0 else -1))), 2)

@@ -63,6 +63,8 @@ QPushButton#key { background:$BTN; border:1px solid $BORDER; border-radius:6px; 
 QPushButton#key:hover { border-color:#2F6BFF; }
 QPushButton#tab { background:transparent; border:none; border-bottom:2px solid transparent; padding:8px 4px; color:$DIM; font-weight:600; }
 QPushButton#tab:checked { color:$TITLE; border-bottom:2px solid #2F6BFF; }
+QPushButton#tbtn { background:transparent; border:none; border-radius:6px; color:$ICON; font-size:11pt; }
+QPushButton#tbtn:hover { background:$BTN_HI; color:$ICON_HI; }
 QPushButton#link { background:transparent; border:none; color:$TXT; font-weight:600; text-align:left; padding:4px 0; }
 QLabel#head { color:$DIM; font-size:8pt; padding-top:6px; }
 QLabel#title { color:$TITLE; font-weight:600; }
@@ -141,7 +143,9 @@ def draw_bar(p, r, stops, t, knob="round"):
     p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
     x = r.left() + t * r.width()
     cy = r.center().y()
-    if knob == "round":
+    if knob is None:
+        pass
+    elif knob == "round":
         p.setBrush(QColor(0, 0, 0, 90))
         p.drawEllipse(QPointF(x, cy + 1), 8, 8)
         p.setBrush(QColor("#F4F6FB"))
@@ -1232,6 +1236,10 @@ class FloatingPanel(QWidget):
 
     def save(self):
         os.makedirs(APP_DIR, exist_ok=True)
+        if self._ref is not None:
+            vis = self._ref.isVisible()
+            self._ref.save_state()
+            self.cfg["ref_open"] = vis
         if self.body:
             self.layouts[self.cur]["items"] = self.body.items()
         s = self.state
@@ -1428,6 +1436,11 @@ class FloatingPanel(QWidget):
         m = QMenu(self)
         m.addAction("Настроить панель…", self.open_editor)
         m.addSeparator()
+        rb = m.addMenu("Референс-доска")
+        rb.addAction("Показать / скрыть", self.toggle_refboard)
+        rb.addAction(("✓  " if self._ref and self._ref.clickthrough else "    ") + "Сквозь клик",
+                     self.ref_clickthrough)
+        m.addAction("Генератор палитры…", self.palette_generator)
         m.addAction("Подключение к CSP…", self.open_csp)
         ps = m.addAction(("✓  " if self.cfg.get("ps_sync") else "    ") + "Синхронизация с Photoshop")
         ps.triggered.connect(lambda: self.cfg.__setitem__("ps_sync", not self.cfg.get("ps_sync")))
@@ -1485,6 +1498,46 @@ class FloatingPanel(QWidget):
                 QMessageBox.warning(self, "Автозапуск", str(e))
         else:
             self._configure_keys()
+
+    # ---------------- референсы и генератор
+    _ref = None
+
+    def refboard(self):
+        if self._ref is None:
+            import dcp_refboard
+            self._ref = dcp_refboard.RefBoard(self)
+        return self._ref
+
+    def toggle_refboard(self):
+        rb = self.refboard()
+        if rb.isVisible():
+            rb.hide()
+        else:
+            rb.show()
+            rb.raise_()
+            rb.activateWindow()
+
+    def ref_clickthrough(self):
+        rb = self.refboard()
+        if not rb.isVisible():
+            rb.show()
+        rb.toggle_clickthrough()
+
+    def palette_generator(self):
+        import dcp_refboard
+        md = QGuiApplication.clipboard().mimeData()
+        img = QImage(md.imageData()) if md.hasImage() else None
+        title = "Палитра из буфера обмена"
+        if img is None or img.isNull():
+            path, _ = QFileDialog.getOpenFileName(self, "Картинка для палитры", "",
+                                                  "Изображения (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff *.gif)")
+            if not path:
+                return
+            img = QImage(path)
+            title = "Палитра: " + os.path.basename(path)
+        if img.isNull():
+            return
+        dcp_refboard.PaletteGenerator(self, img, title).exec()
 
     # ---------------- пипетка, холст, профили, резервная копия, обновления
     def eyedropper(self):
@@ -1760,6 +1813,12 @@ class FloatingPanel(QWidget):
             self.pick_under_cursor()
         elif act == "scan_canvas":
             self.scan_canvas()
+        elif act == "ref_board":
+            self.toggle_refboard()
+        elif act == "ref_clickthrough":
+            self.ref_clickthrough()
+        elif act == "palette_generator":
+            self.palette_generator()
 
     def on_action_release(self, act):
         if act == "call":
@@ -1813,6 +1872,8 @@ class FloatingPanel(QWidget):
         self.tray = QSystemTrayIcon(icon, self)
         m = QMenu()
         m.addAction("Показать панель", self._show_home)
+        m.addAction("Референс-доска", self.toggle_refboard)
+        m.addAction("Референсы: сквозь клик вкл/выкл", self.ref_clickthrough)
         m.addAction("Настройки…", self.open_settings)
         m.addAction("Подключение к CSP…", self.open_csp)
         m.addSeparator()
@@ -1823,6 +1884,8 @@ class FloatingPanel(QWidget):
         self.tray.show()
 
     def start(self):
+        if self.cfg.get("ref_open"):
+            QTimer.singleShot(300, lambda: self.refboard().show())
         if self.mode == "pinned":
             self._show_home()
         else:
@@ -2751,6 +2814,8 @@ def main():
 
 
 import dcp_extras  # noqa: E402,F401  — регистрирует дополнительные компоненты
+import dcp_extras2  # noqa: E402,F401
+import dcp_refboard  # noqa: E402,F401
 
 if __name__ == "__main__":
     main()

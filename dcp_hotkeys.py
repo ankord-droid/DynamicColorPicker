@@ -31,6 +31,9 @@ ACTIONS = [
     ("eyedropper", "Пипетка с экрана (с лупой)"),
     ("pick_under_cursor", "Взять цвет под курсором (мгновенно)"),
     ("scan_canvas", "Обновить палитру холста"),
+    ("ref_board", "Референс-доска: показать / скрыть"),
+    ("ref_clickthrough", "Референсы: сквозь клик"),
+    ("palette_generator", "Генератор палитры"),
 ]
 DEFAULT_BINDINGS = {"call": "vk17+vk18+vk67"}   # Ctrl+Alt+C
 

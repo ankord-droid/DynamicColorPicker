@@ -27,7 +27,7 @@ jobs:
       - name: Smoke test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -c "import dcp_app, dcp_extras, csp_companion, dcp_formats, dcp_hotkeys; print('ok', dcp_app.APP_VERSION)"
+        run: python -c "import dcp_app, dcp_extras, dcp_extras2, dcp_refboard, csp_companion, dcp_formats, dcp_hotkeys; print('ok', dcp_app.APP_VERSION)"
 
       - name: Version
         id: ver
@@ -46,6 +46,8 @@ jobs:
             --name DynamicColorPicker --icon icon.ico `
             --add-data "icon.png;." `
             --hidden-import dcp_extras `
+            --hidden-import dcp_extras2 `
+            --hidden-import dcp_refboard `
             --hidden-import PySide6.QtNetwork `
             --hidden-import pynput.keyboard._win32 `
             --hidden-import pynput.mouse._win32 `
