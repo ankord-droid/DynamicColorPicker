@@ -956,36 +956,110 @@ def installed_mode():
 
 
 class Updater(QObject):
-    """Проверяет GitHub Releases, скачивает и ставит новую версию."""
+    """Проверяет GitHub Releases, скачивает и ставит новую версию.
+
+    Сеть — через Qt (системные прокси/VPN Windows, хранилище сертификатов Windows).
+    Порядок проверки: api.github.com → редирект github.com/…/releases/latest → urllib (запасной).
+    """
     available = Signal(dict)
     status = Signal(str)
     downloaded = Signal(str)
 
     API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+    PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
+    UA = b"DynamicColorPicker"
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PySide6.QtNetwork import QNetworkAccessManager
+        self.nam = QNetworkAccessManager(self)
+        self._manual = False
+        self._errors = []
+
+    # ---------------- запросы
+    def _req(self, url, timeout_ms, follow=True):
+        from PySide6.QtNetwork import QNetworkRequest
+        from PySide6.QtCore import QUrl
+        r = QNetworkRequest(QUrl(url))
+        r.setRawHeader(b"User-Agent", self.UA)
+        r.setRawHeader(b"Accept", b"application/vnd.github+json")
+        r.setTransferTimeout(timeout_ms)
+        r.setAttribute(QNetworkRequest.RedirectPolicyAttribute,
+                       QNetworkRequest.NoLessSafeRedirectPolicy if follow else QNetworkRequest.ManualRedirectPolicy)
+        return r
+
+    def _log(self, msg):
+        import logging
+        logging.getLogger("dcp").warning("Обновления: %s", msg)
+
+    # ---------------- проверка
     def check(self, manual=False):
-        threading.Thread(target=self._check, args=(manual,), daemon=True).start()
+        self._manual = manual
+        self._errors = []
+        rep = self.nam.get(self._req(self.API, 25000))
+        rep.finished.connect(lambda: self._api_done(rep))
 
-    def _check(self, manual):
+    def _api_done(self, rep):
+        from PySide6.QtNetwork import QNetworkReply
+        try:
+            if rep.error() == QNetworkReply.NoError:
+                data = json.loads(bytes(rep.readAll()).decode("utf-8"))
+                self._got(data)
+                return
+            self._errors.append(f"api.github.com: {rep.errorString()}")
+        except Exception as e:
+            self._errors.append(f"api.github.com: {e}")
+        finally:
+            rep.deleteLater()
+        self._log(self._errors[-1])
+        r2 = self.nam.get(self._req(self.PAGE, 25000, follow=False))
+        r2.finished.connect(lambda: self._page_done(r2))
+
+    def _page_done(self, rep):
+        from PySide6.QtNetwork import QNetworkRequest
+        try:
+            loc = rep.attribute(QNetworkRequest.RedirectionTargetAttribute)
+            loc = loc.toString() if hasattr(loc, "toString") else str(loc or "")
+            if not loc:
+                loc = bytes(rep.rawHeader("Location")).decode()
+            if "/tag/" in loc:
+                tag = loc.rstrip("/").split("/tag/")[-1]
+                base = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/"
+                names = [f"DynamicColorPicker-Setup-{tag}.exe", f"DynamicColorPicker-{tag}.exe"]
+                self._got({"tag_name": tag, "html_url": f"https://github.com/{GITHUB_REPO}/releases/tag/{tag}",
+                           "body": "", "assets": [{"name": n, "browser_download_url": base + n} for n in names]})
+                return
+            self._errors.append(f"github.com: {rep.errorString() or 'нет перенаправления на релиз'}")
+        except Exception as e:
+            self._errors.append(f"github.com: {e}")
+        finally:
+            rep.deleteLater()
+        self._log(self._errors[-1])
+        threading.Thread(target=self._urllib_check, daemon=True).start()
+
+    def _urllib_check(self):
         try:
             req = urllib.request.Request(self.API, headers={"Accept": "application/vnd.github+json",
                                                             "User-Agent": "DynamicColorPicker"})
-            data = json.load(urllib.request.urlopen(req, timeout=10))
+            data = json.load(urllib.request.urlopen(req, timeout=25))
         except Exception as e:
-            __import__("logging").getLogger("dcp").warning("Проверка обновлений: %s", e)
-            if manual:
-                self.status.emit(f"Не удалось проверить обновления: {e}")
+            self._errors.append(f"urllib: {e}")
+            self._log(self._errors[-1])
+            if self._manual:
+                self.status.emit("Не удалось связаться с GitHub. Проверьте интернет, VPN или прокси, "
+                                 "или скачайте версию вручную со страницы релизов. Подробности — в журнале.")
             return
+        self._got(data)
+
+    def _got(self, data):
         tag = data.get("tag_name", "")
         if _ver(tag) > _ver(APP_VERSION):
             self.available.emit(data)
-        elif manual:
+        elif self._manual:
             self.status.emit(f"Установлена последняя версия ({APP_VERSION}).")
 
+    # ---------------- загрузка
     def download(self, release):
-        threading.Thread(target=self._download, args=(release,), daemon=True).start()
-
-    def _download(self, release):
         assets = release.get("assets", [])
         want_setup = installed_mode()
         pick = None
@@ -998,19 +1072,28 @@ class Updater(QObject):
         if not pick:
             self.status.emit("В релизе нет exe-файла.")
             return
-        try:
-            dst = os.path.join(tempfile.gettempdir(), pick["name"])
-            req = urllib.request.Request(pick["browser_download_url"], headers={"User-Agent": "DynamicColorPicker"})
-            with urllib.request.urlopen(req, timeout=120) as r, open(dst, "wb") as f:
-                while True:
-                    chunk = r.read(1 << 16)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-        except Exception as e:
-            self.status.emit(f"Ошибка загрузки: {e}")
+        dst = os.path.join(tempfile.gettempdir(), pick["name"])
+        self._file = open(dst + ".part", "wb")
+        self._dst = dst
+        rep = self.nam.get(self._req(pick["browser_download_url"], 60000))
+        rep.readyRead.connect(lambda: self._file.write(bytes(rep.readAll())))
+        rep.finished.connect(lambda: self._dl_done(rep))
+
+    def _dl_done(self, rep):
+        from PySide6.QtNetwork import QNetworkReply
+        self._file.write(bytes(rep.readAll()))
+        self._file.close()
+        ok = rep.error() == QNetworkReply.NoError
+        err = rep.errorString()
+        rep.deleteLater()
+        if not ok or os.path.getsize(self._dst + ".part") < 1_000_000:
+            self._log(f"загрузка: {err}")
+            self.status.emit(f"Ошибка загрузки обновления: {err}")
             return
-        self.downloaded.emit(dst)
+        if os.path.exists(self._dst):
+            os.remove(self._dst)
+        os.rename(self._dst + ".part", self._dst)
+        self.downloaded.emit(self._dst)
 
     @staticmethod
     def install(path):
