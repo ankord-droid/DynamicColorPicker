@@ -138,37 +138,43 @@ STEPS = [
 ]
 
 
-class DimOverlay(QWidget):
-    """Затемнение экрана с «окном» вокруг подсвеченной области. Клики проходят насквозь."""
+class PanelHighlight(QWidget):
+    """Подсветка внутри самой панели: затемнение вокруг нужной части + пульсирующая рамка.
+    Дочерний виджет с WA_TransparentForMouseEvents — клики всегда проходят к панели,
+    остальной экран не затеняется и не блокируется."""
 
-    def __init__(self):
-        super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint |
-                         Qt.WindowTransparentForInput)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setAttribute(Qt.WA_ShowWithoutActivating)
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)
         self.hole = QRect()
         self.phase = 0.0
 
-    def set_hole(self, global_rect):
-        scr = QGuiApplication.screenAt(global_rect.center()) or QGuiApplication.primaryScreen()
-        if self.geometry() != scr.geometry():
-            self.setGeometry(scr.geometry())
-        self.hole = global_rect.translated(-self.x(), -self.y())
+    def set_hole(self, local_rect):
+        p = self.parentWidget()
+        if self.geometry() != p.rect():
+            self.setGeometry(p.rect())
+        self.hole = local_rect
+        self.raise_()
         self.update()
 
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        full = QPainterPath()
-        full.addRect(QRectF(self.rect()))
+        panel = self.parentWidget()
+        card = QPainterPath()
+        card.addRoundedRect(panel.card_rect(), 16, 16)
+        tabs = panel._tab_rects()
+        for r in tabs:
+            card.addRoundedRect(r, 8, 8)
         hole = QPainterPath()
-        hr = QRectF(self.hole).adjusted(-6, -6, 6, 6)
-        hole.addRoundedRect(hr, 12, 12)
-        p.fillPath(full.subtracted(hole), QColor(6, 9, 16, 150))
+        hr = QRectF(self.hole).adjusted(-4, -4, 4, 4)
+        hole.addRoundedRect(hr, 10, 10)
+        p.fillPath(card.subtracted(hole), QColor(6, 9, 16, 150))
         a = int(140 + 100 * abs(1 - (self.phase % 2)))
         p.setPen(QPen(QColor(47, 107, 255, a), 3))
         p.setBrush(Qt.NoBrush)
-        p.drawRoundedRect(hr, 12, 12)
+        p.drawRoundedRect(hr, 10, 10)
 
 
 class TourCard(QWidget):
@@ -230,7 +236,7 @@ class Tour(QObject):
             copy.deepcopy(panel.body.items())
         panel._tour = self
         panel._show_home()
-        self.dim = DimOverlay()
+        self.dim = PanelHighlight(panel)
         self.card = TourCard(self)
         self.timer = QTimer(self, interval=60)
         self.timer.timeout.connect(self._tick)
@@ -307,7 +313,7 @@ class Tour(QObject):
             self.panel._show_home()
         tr = self._target()
         self.dim.phase += 0.08
-        self.dim.set_hole(tr)
+        self.dim.set_hole(QRect(self.panel.mapFromGlobal(tr.topLeft()), tr.size()))
         # карточка — справа от панели, иначе слева; по высоте — у подсвеченной области
         pg = self.panel.frameGeometry()
         scr = (QGuiApplication.screenAt(pg.center()) or QGuiApplication.primaryScreen()).availableGeometry()
@@ -325,12 +331,13 @@ class Tour(QObject):
     def finish(self):
         self.timer.stop()
         self._set_items(None)
-        self.dim.close()
+        self.dim.hide()
         self.card.close()
         self.dim.deleteLater()
         self.card.deleteLater()
         self.panel._tour = None
         self.panel.cfg["tour_done"] = True
+        self.panel.update()
         self.deleteLater()
 
 

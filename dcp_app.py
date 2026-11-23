@@ -1896,6 +1896,7 @@ class FloatingPanel(QWidget):
         m.addAction("Показать панель", self._show_home)
         m.addAction("Референс-доска", self.toggle_refboard)
         m.addAction("Обучение", self.start_tour)
+        m.addAction("Прервать обучение", lambda: self._tour and self._tour.finish())
         m.addAction("Референсы: сквозь клик вкл/выкл", self.ref_clickthrough)
         m.addAction("Настройки…", self.open_settings)
         m.addAction("Подключение к CSP…", self.open_csp)

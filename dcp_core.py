@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QTimer
 from PySide6.QtGui import QColor, QImage, QGuiApplication
 import csp_companion as cspc
 
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.3.1"
 GITHUB_REPO = "ankord-droid/DynamicColorPicker"
 
 DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".dynamic_color_picker")
