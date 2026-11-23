@@ -34,6 +34,9 @@ ACTIONS = [
     ("ref_board", "Референс-доска: показать / скрыть"),
     ("ref_clickthrough", "Референсы: сквозь клик"),
     ("palette_generator", "Генератор палитры"),
+    ("brush_window", "Окно кисти: показать / скрыть"),
+    ("brush_size_up", "Размер кисти +"), ("brush_size_down", "Размер кисти −"),
+    ("brush_alpha_up", "Непрозрачность кисти +"), ("brush_alpha_down", "Непрозрачность кисти −"),
 ]
 DEFAULT_BINDINGS = {"call": "vk17+vk18+vk67"}   # Ctrl+Alt+C
 

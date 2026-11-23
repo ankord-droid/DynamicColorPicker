@@ -1254,6 +1254,10 @@ class FloatingPanel(QWidget):
             vis = self._ref.isVisible()
             self._ref.save_state()
             self.cfg["ref_open"] = vis
+        if self._brush is not None:
+            vis = self._brush.isVisible()
+            self._brush.save_state()
+            self.cfg["brush_open"] = vis
         if self._tour is not None:
             self.layouts[self.cur]["items"] = copy.deepcopy(self._tour.backup)   # не сохранять демо-набор тура
         elif self.body:
@@ -1457,6 +1461,7 @@ class FloatingPanel(QWidget):
         rb.addAction(("✓  " if self._ref and self._ref.clickthrough else "    ") + "Сквозь клик",
                      self.ref_clickthrough)
         m.addAction("Генератор палитры…", self.palette_generator)
+        m.addAction("Окно кисти (размер / прозрачность)", self.toggle_brush)
         m.addAction("Подключение к CSP…", self.open_csp)
         ps = m.addAction(("✓  " if self.cfg.get("ps_sync") else "    ") + "Синхронизация с Photoshop")
         ps.triggered.connect(lambda: self.cfg.__setitem__("ps_sync", not self.cfg.get("ps_sync")))
@@ -1525,6 +1530,23 @@ class FloatingPanel(QWidget):
     def start_tour(self):
         import dcp_tour
         dcp_tour.start_tour(self)
+
+    # ---------------- окно кисти
+    _brush = None
+
+    def brushwindow(self):
+        if self._brush is None:
+            import dcp_brush
+            self._brush = dcp_brush.BrushWindow(self)
+        return self._brush
+
+    def toggle_brush(self):
+        b = self.brushwindow()
+        if b.isVisible():
+            b.hide()
+        else:
+            b.show()
+            b.raise_()
 
     # ---------------- референсы и генератор
     _ref = None
@@ -1842,6 +1864,12 @@ class FloatingPanel(QWidget):
             self.scan_canvas()
         elif act == "ref_board":
             self.toggle_refboard()
+        elif act == "brush_window":
+            self.toggle_brush()
+        elif act in ("brush_size_up", "brush_size_down"):
+            self.brushwindow().nudge("size", 3 if act.endswith("up") else -3)
+        elif act in ("brush_alpha_up", "brush_alpha_down"):
+            self.brushwindow().nudge("alpha", 5 if act.endswith("up") else -5)
         elif act == "ref_clickthrough":
             self.ref_clickthrough()
         elif act == "palette_generator":
@@ -1903,6 +1931,7 @@ class FloatingPanel(QWidget):
         m.addAction("Обучение", self.start_tour)
         m.addAction("Прервать обучение", lambda: self._tour and self._tour.finish())
         m.addAction("Референсы: сквозь клик вкл/выкл", self.ref_clickthrough)
+        m.addAction("Окно кисти", self.toggle_brush)
         m.addAction("Настройки…", self.open_settings)
         m.addAction("Подключение к CSP…", self.open_csp)
         m.addSeparator()
@@ -1915,6 +1944,8 @@ class FloatingPanel(QWidget):
     def start(self):
         if self.cfg.get("ref_open"):
             QTimer.singleShot(300, lambda: self.refboard().show())
+        if self.cfg.get("brush_open"):
+            QTimer.singleShot(350, lambda: self.brushwindow().show())
         if not self.cfg.get("tour_done"):
             QTimer.singleShot(1500, self.start_tour)
         if self.mode == "pinned":

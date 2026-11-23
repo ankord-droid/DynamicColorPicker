@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QTimer
 from PySide6.QtGui import QColor, QImage, QGuiApplication
 import csp_companion as cspc
 
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.4.0"
 GITHUB_REPO = "ankord-droid/DynamicColorPicker"
 
 DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".dynamic_color_picker")
@@ -513,6 +513,7 @@ def extract_colors(src, k, accuracy, mask=None):
 class CSPLink(QObject):
     """Связь ColorState <-> CSP Companion Mode."""
     statusChanged = Signal(str, bool)
+    toolChanged = Signal(dict)          # размер и прозрачность кисти из CSP
     SRC = "csp"
 
     def __init__(self, state):
@@ -567,6 +568,7 @@ class CSPLink(QObject):
         w = cspc.CompanionWorker(d["ips"], d["port"], d["password"], d["generation"], reconnect)
         w.status.connect(self._set_status)
         w.colorReceived.connect(self._on_csp_color)
+        w.toolReceived.connect(self._on_tool)
         w.authenticated.connect(lambda sess: cspc.save_session(APP_DIR, sess))
         self.worker = w
         w.start()
@@ -578,6 +580,22 @@ class CSPLink(QObject):
             self.worker.wait(3000)
             self.worker = None
         self._set_status("Не подключено", False)
+
+    tool = {"size": None, "alpha": None, "size_ok": False, "alpha_ok": False, "unit": "px"}
+
+    def _on_tool(self, d):
+        self.tool = d
+        self.toolChanged.emit(d)
+
+    def set_brush_size(self, px):
+        self.tool = dict(self.tool, size=float(px))
+        if self.worker and self.connected:
+            self.worker.set_brush_size(px)
+
+    def set_alpha(self, pct):
+        self.tool = dict(self.tool, alpha=int(round(pct)))
+        if self.worker and self.connected:
+            self.worker.set_alpha(pct)
 
     def _set_status(self, text, ok):
         self.connected, self.text = ok, text

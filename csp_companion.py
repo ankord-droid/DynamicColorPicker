@@ -121,6 +121,7 @@ class CompanionWorker(QThread):
     """Владеет сокетом. Читает цвет CSP и отправляет последний запрошенный цвет."""
     status = Signal(str, bool)          # текст, подключено
     colorReceived = Signal(dict)        # {"main":(h,s,v), "sub":(h,s,v), "index":0|1, "transparent":bool}
+    toolReceived = Signal(dict)         # {"size": px, "alpha": %, "size_ok": bool, "alpha_ok": bool, "unit": str}
     authenticated = Signal(dict)        # данные сессии для сохранения
 
     POLL = 0.2
@@ -134,11 +135,23 @@ class CompanionWorker(QThread):
         self._serial = 0
         self._buf = bytearray()
         self._pending = None
+        self._pending_size = None
+        self._pending_alpha = None
+        self._tool_quiet = 0.0
+        self._tool = {"size": None, "alpha": None, "size_ok": False, "alpha_ok": False, "unit": "px"}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._quiet_until = 0.0
 
     # --- API из GUI-потока
+    def set_brush_size(self, px):
+        with self._lock:
+            self._pending_size = float(px)
+
+    def set_alpha(self, pct):
+        with self._lock:
+            self._pending_alpha = int(round(pct))
+
     def set_color(self, rgb, index, transparent=False):
         h, s, v = colorsys.rgb_to_hsv(*rgb)
         with self._lock:
@@ -172,6 +185,19 @@ class CompanionWorker(QThread):
 
     def _absorb(self, m):
         d = m.get("detail")
+        if isinstance(d, dict) and time.monotonic() >= self._tool_quiet and \
+                ("CurrentToolBrushSize" in d or "CurrentToolAlphaPercent" in d or "IsToolBrushSizeAvailable" in d):
+            t = dict(self._tool)
+            if "CurrentToolBrushSize" in d:
+                t["size"] = float(d["CurrentToolBrushSize"])
+            if "CurrentToolAlphaPercent" in d:
+                t["alpha"] = int(d["CurrentToolAlphaPercent"])
+            t["size_ok"] = bool(d.get("IsToolBrushSizeAvailable", t["size"] is not None))
+            t["alpha_ok"] = bool(d.get("IsToolAlphaAvailable", t["alpha"] is not None))
+            t["unit"] = d.get("LengthUnitKind", t["unit"])
+            if t != self._tool:
+                self._tool = t
+                self.toolReceived.emit(dict(t))
         if not isinstance(d, dict) or "HSVColorMainH" not in d or time.monotonic() < self._quiet_until:
             return
         f = lambda k: d.get(k, 0) / MAX_U32
@@ -222,9 +248,17 @@ class CompanionWorker(QThread):
                 now = time.monotonic()
                 with self._lock:
                     pending, self._pending = self._pending, None
+                    size, self._pending_size = self._pending_size, None
+                    alpha, self._pending_alpha = self._pending_alpha, None
                 if pending:
                     self._quiet_until = now + 0.35     # не принимать «эхо» старого цвета
                     self._send("SetCurrentColor", json.dumps(pending))
+                if size is not None:                   # SetBrushSize / SetAlpha — «голое» число в detail
+                    self._tool_quiet = now + 0.35
+                    self._send("SetBrushSize", json.dumps(round(size, 2)))
+                if alpha is not None:
+                    self._tool_quiet = now + 0.35
+                    self._send("SetAlpha", json.dumps(max(0, min(100, alpha))))
                 if now - last_hb >= self.HEARTBEAT:
                     self._send("TellHeartbeat", HB_ACTIVE)
                     last_hb = now
