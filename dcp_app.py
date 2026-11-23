@@ -269,6 +269,9 @@ class IconButton(QAbstractButton):
         elif k == "edit":
             p.drawLine(QPointF(cx - 5, cy + 5), QPointF(cx + 5, cy - 5))
             p.drawLine(QPointF(cx - 6, cy + 6), QPointF(cx - 3, cy + 6))
+        elif k == "check":
+            p.drawLine(QPointF(cx - 6, cy), QPointF(cx - 2, cy + 4))
+            p.drawLine(QPointF(cx - 2, cy + 4), QPointF(cx + 6, cy - 5))
         elif k == "eyedropper":
             p.drawLine(QPointF(cx - 6, cy + 6), QPointF(cx + 2, cy - 2))
             p.drawLine(QPointF(cx - 7, cy + 7), QPointF(cx - 6, cy + 6))
@@ -305,6 +308,10 @@ class Comp(QWidget):
     def adjust(self, step, pos):
         """HoverAdjust: колёсико / диск над компонентом. Вернуть True, если обработано."""
         return False
+
+    def _repaint(self, *_):
+        """Слот для сигналов состояния. Метод (не лямбда): Qt сам отключит его при удалении виджета."""
+        self.update()
 
     def wheelEvent(self, e):
         d = e.angleDelta().y() or e.angleDelta().x()
@@ -780,7 +787,7 @@ class FGBGComp(Comp):
 
     def __init__(self, app, opts=None):
         super().__init__(app, opts)
-        self.state.changed.connect(lambda _: self.update())
+        self.state.changed.connect(self._repaint)
         self.setToolTip("ЛКМ — выбрать слот, ПКМ — поменять основной и фоновый")
 
     def heightFor(self, w):
@@ -1128,6 +1135,7 @@ def ps_set(state):
 class FloatingPanel(QWidget):
     """Главное окно: парящая карточка без рамки с боковыми вкладками панелей (до 4)."""
     canvasUpdated = Signal(list)
+    _tour = None
 
     def __init__(self):
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
@@ -1242,7 +1250,9 @@ class FloatingPanel(QWidget):
             vis = self._ref.isVisible()
             self._ref.save_state()
             self.cfg["ref_open"] = vis
-        if self.body:
+        if self._tour is not None:
+            self.layouts[self.cur]["items"] = copy.deepcopy(self._tour.backup)   # не сохранять демо-набор тура
+        elif self.body:
             self.layouts[self.cur]["items"] = self.body.items()
         s = self.state
         c = dict(self.cfg)
@@ -1383,7 +1393,7 @@ class FloatingPanel(QWidget):
 
     # ---------------- layouts
     def switch(self, i):
-        if i == self.cur or not 0 <= i < len(self.layouts):
+        if i == self.cur or not 0 <= i < len(self.layouts) or self._tour is not None:
             return
         self.layouts[self.cur]["items"] = self.body.items()
         self.cur = i
@@ -1449,6 +1459,7 @@ class FloatingPanel(QWidget):
         m.addSeparator()
         m.addAction("Настройки…", self.open_settings)
         m.addAction("Горячие клавиши…", lambda: self.open_settings(1))
+        m.addAction("Обучение", self.start_tour)
         bk = m.addMenu("Резервная копия")
         bk.addAction("Экспорт настроек…", self.export_settings)
         bk.addAction("Импорт настроек…", self.import_settings)
@@ -1463,10 +1474,15 @@ class FloatingPanel(QWidget):
         m.exec(self.menu_btn.mapToGlobal(QPoint(0, self.menu_btn.height() + 4)))
 
     def open_editor(self):
+        if self._tour is not None:
+            return
         self.layouts[self.cur]["items"] = self.body.items()
         dlg = EditorDialog(self, self.layouts[self.cur]["items"])
-        if dlg.exec():
-            self.layouts[self.cur]["items"] = dlg.items()
+        ok = dlg.exec()
+        items = dlg.items()
+        dlg.deleteLater()
+        if ok:
+            self.layouts[self.cur]["items"] = items
             self.body.hide()
             self.body.deleteLater()
             self.body = None
@@ -1500,6 +1516,10 @@ class FloatingPanel(QWidget):
                 QMessageBox.warning(self, "Автозапуск", str(e))
         else:
             self._configure_keys()
+
+    def start_tour(self):
+        import dcp_tour
+        dcp_tour.start_tour(self)
 
     # ---------------- референсы и генератор
     _ref = None
@@ -1875,6 +1895,7 @@ class FloatingPanel(QWidget):
         m = QMenu()
         m.addAction("Показать панель", self._show_home)
         m.addAction("Референс-доска", self.toggle_refboard)
+        m.addAction("Обучение", self.start_tour)
         m.addAction("Референсы: сквозь клик вкл/выкл", self.ref_clickthrough)
         m.addAction("Настройки…", self.open_settings)
         m.addAction("Подключение к CSP…", self.open_csp)
@@ -1888,6 +1909,8 @@ class FloatingPanel(QWidget):
     def start(self):
         if self.cfg.get("ref_open"):
             QTimer.singleShot(300, lambda: self.refboard().show())
+        if not self.cfg.get("tour_done"):
+            QTimer.singleShot(1500, self.start_tour)
         if self.mode == "pinned":
             self._show_home()
         else:

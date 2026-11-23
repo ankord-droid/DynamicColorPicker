@@ -147,7 +147,7 @@ class ContrastComp(ui.Comp):
 
     def __init__(self, app, opts=None):
         super().__init__(app, opts)
-        self.state.changed.connect(lambda _: self.update())
+        self.state.changed.connect(self._repaint)
         self.setToolTip("ΔL* — разница светлоты основного и фонового цвета. ПКМ — поменять их местами")
 
     def heightFor(self, w):
@@ -259,7 +259,7 @@ class MaterialsComp(ui.Comp):
         super().__init__(app, opts)
         self.opts.setdefault("item", ["Кожа", "Средняя"])
         self.opts.setdefault("custom", None)       # [hex, kind] — от текущего цвета
-        self.state.changed.connect(lambda _: self.update())
+        self.state.changed.connect(self._repaint)
         self.setToolTip("Клик по заголовку — материал. ПКМ по рампе — сохранить как набор")
 
     def heightFor(self, w):

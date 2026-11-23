@@ -63,7 +63,8 @@ MASKS = {
 
 class GamutComp(ui.Comp):
     """Гамут-маска по Гарни: круг оттенок × насыщенность, вне маски цвета затемнены.
-    ЛКМ — выбор цвета, ПКМ-перетаскивание — сдвиг маски, колёсико — поворот, Ctrl+колёсико — размер."""
+    ЛКМ — выбор цвета, ПКМ-перетаскивание — сдвиг маски, колёсико — поворот, Ctrl+колёсико — размер.
+    Свои маски рисуются по точкам (меню формы → «Нарисовать новую маску»)."""
     KEY = "gamut"
 
     def __init__(self, app, opts=None):
@@ -79,16 +80,44 @@ class GamutComp(ui.Comp):
         self.h, self.s, self.v = h, s, v
         self._img = self._img_n = None
         self._drag = None
+        self.edit = None              # список точек в координатах круга, пока рисуется маска
+        self.edit_name = None
+        self._edit_drag = -1
+        self.setFocusPolicy(Qt.ClickFocus)
         self.btn = ui.IconButton("mode", self, 24, "Форма маски")
         self.btn.clicked.connect(self._menu)
+        self.ok_btn = ui.IconButton("check", self, 24, "Сохранить маску (Enter)")
+        self.ok_btn.clicked.connect(self._finish_edit)
+        self.cancel_btn = ui.IconButton("close", self, 24, "Отмена (Esc)")
+        self.cancel_btn.clicked.connect(self._cancel_edit)
+        self.ok_btn.hide()
+        self.cancel_btn.hide()
         self.state.changed.connect(self._on_state)
         self.setToolTip("ЛКМ — выбрать цвет. ПКМ — двигать маску. Колёсико — повернуть, Ctrl+колёсико — размер")
+
+    # ---- маски: встроенные + свои (хранятся в настройках приложения)
+    def _custom(self):
+        return self.app.cfg.setdefault("gamut_masks", {})
+
+    def _base_parts(self):
+        shape = self.opts["shape"]
+        if shape.startswith("custom:"):
+            pts = self._custom().get(shape[7:])
+            if pts and len(pts) >= 3:
+                return [[tuple(p) for p in pts]]
+            shape = "triangle"
+        if shape == "split":
+            base = MASKS["acute"][1]
+            return [base, [(-x, -y) for x, y in base]]
+        return [MASKS.get(shape, MASKS["triangle"])[1]]
 
     def heightFor(self, w):
         return int(w * 0.86)
 
     def resizeEvent(self, e):
         self.btn.move(self.width() - 26, self.height() - 24)
+        self.ok_btn.move(self.width() - 26, 2)
+        self.cancel_btn.move(self.width() - 52, 2)
 
     def _on_state(self, src):
         if src is self:
@@ -101,9 +130,24 @@ class GamutComp(ui.Comp):
 
     def _menu(self):
         m = QMenu(self)
+        cur = self.opts["shape"]
         for k, (label, _) in MASKS.items():
-            a = m.addAction(("●  " if self.opts["shape"] == k else "    ") + label)
+            a = m.addAction(("●  " if cur == k else "    ") + label)
             a.triggered.connect(lambda _=False, k=k: self._set("shape", k))
+        custom = self._custom()
+        if custom:
+            m.addSeparator()
+            for name in custom:
+                key = "custom:" + name
+                a = m.addAction(("●  " if cur == key else "    ") + name)
+                a.triggered.connect(lambda _=False, k=key: self._set("shape", k))
+        m.addSeparator()
+        m.addAction("    Нарисовать новую маску…", self._start_new)
+        if cur.startswith("custom:"):
+            m.addAction("    Редактировать «%s»" % cur[7:], self._start_edit_current)
+            m.addAction("    Удалить «%s»" % cur[7:], self._delete_current)
+        else:
+            m.addAction("    Редактировать как свою копию", self._start_edit_current)
         m.addSeparator()
         a = m.addAction(("✓  " if self.opts["constrain"] else "    ") + "Ограничивать выбор маской")
         a.triggered.connect(lambda: self._set("constrain", not self.opts["constrain"]))
@@ -118,26 +162,120 @@ class GamutComp(ui.Comp):
         self.opts.update(rot=0.0, scale=1.0, ox=0.0, oy=0.0)
         self.update()
 
+    # ---- преобразование: основа маски <-> круг
+    def _fwd(self, x, y):
+        o = self.opts
+        a = math.radians(o["rot"])
+        c, s = math.cos(a), math.sin(a)
+        return (x * c - y * s) * o["scale"] + o["ox"], (x * s + y * c) * o["scale"] + o["oy"]
+
+    def _inv(self, x, y):
+        o = self.opts
+        a = math.radians(o["rot"])
+        c, s = math.cos(a), math.sin(a)
+        x, y = (x - o["ox"]) / o["scale"], (y - o["oy"]) / o["scale"]
+        return x * c + y * s, -x * s + y * c
+
+    def _polys(self):
+        if self.edit is not None:
+            return [list(self.edit)] if len(self.edit) >= 3 else []
+        return [[self._fwd(x, y) for x, y in pts] for pts in self._base_parts()]
+
+    # ---- рисование своей маски
+    def _start_new(self):
+        self.edit, self.edit_name = [], None
+        self._enter_edit()
+
+    def _start_edit_current(self):
+        self.edit = [self._fwd(x, y) for x, y in self._base_parts()[0]]
+        cur = self.opts["shape"]
+        self.edit_name = cur[7:] if cur.startswith("custom:") else None
+        self._enter_edit()
+
+    def _enter_edit(self):
+        self.ok_btn.show()
+        self.cancel_btn.show()
+        self.btn.hide()
+        self.setFocus()
+        self.update()
+
+    def _leave_edit(self):
+        self.edit = None
+        self.edit_name = None
+        self.ok_btn.hide()
+        self.cancel_btn.hide()
+        self.btn.show()
+        self.update()
+
+    def _cancel_edit(self):
+        self._leave_edit()
+
+    def _finish_edit(self):
+        if self.edit is None:
+            return
+        if len(self.edit) < 3:
+            QMessageBox.information(self, "Гамут-маска", "Нужно минимум 3 точки.")
+            return
+        from PySide6.QtWidgets import QInputDialog
+        name = self.edit_name
+        if not name:
+            n = len(self._custom()) + 1
+            name, ok = QInputDialog.getText(self, "Своя гамут-маска", "Название:", text=f"Моя маска {n}")
+            if not ok or not name.strip():
+                return
+            name = name.strip()
+        self.opts.update(rot=0.0, scale=1.0, ox=0.0, oy=0.0)
+        self._custom()[name] = [[round(x, 4), round(y, 4)] for x, y in self.edit]
+        self.opts["shape"] = "custom:" + name
+        self._leave_edit()
+
+    def _delete_current(self):
+        cur = self.opts["shape"]
+        if cur.startswith("custom:") and QMessageBox.question(self, "Гамут-маска", f"Удалить маску «{cur[7:]}»?") \
+                == QMessageBox.Yes:
+            self._custom().pop(cur[7:], None)
+            self.opts["shape"] = "triangle"
+            self.update()
+
+    def _edit_hit(self, pos):
+        for i, (x, y) in enumerate(self.edit or []):
+            pt = self._to_screen(x, y)
+            if (pt - pos).manhattanLength() < 10:
+                return i
+        return -1
+
+    def _edit_insert_index(self, x, y):
+        """Новую точку вставляем в ближайшее ребро, чтобы контур не перекручивался."""
+        pts = self.edit
+        if len(pts) < 3:
+            return len(pts)
+        best, bd = len(pts), 1e9
+        for i in range(len(pts)):
+            ax, ay = pts[i]
+            bx, by = pts[(i + 1) % len(pts)]
+            vx, vy = bx - ax, by - ay
+            t = max(0, min(1, ((x - ax) * vx + (y - ay) * vy) / max(1e-9, vx * vx + vy * vy)))
+            d = (ax + t * vx - x) ** 2 + (ay + t * vy - y) ** 2
+            if d < bd:
+                best, bd = i + 1, d
+        return best
+
+    def keyPressEvent(self, e):
+        if self.edit is None:
+            return super().keyPressEvent(e)
+        if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self._finish_edit()
+        elif e.key() == Qt.Key_Escape:
+            self._cancel_edit()
+        elif e.key() in (Qt.Key_Backspace, Qt.Key_Delete) and self.edit:
+            self.edit.pop()
+            self.update()
+
+    # ---- геометрия и отрисовка
     def _geo(self):
         w, h = self.width(), self.height()
         R = min(w, h) / 2 - 6
         return w / 2, h / 2, R
-
-    def _polys(self):
-        """Маска в нормализованных координатах круга (x вправо, y вверх), с учётом поворота/размера/сдвига."""
-        o = self.opts
-        shape = o["shape"]
-        if shape == "split":
-            base = MASKS["acute"][1]
-            parts = [base, [(-x, -y) for x, y in base]]
-        else:
-            parts = [MASKS.get(shape, MASKS["triangle"])[1]]
-        a = math.radians(o["rot"])
-        c, s = math.cos(a), math.sin(a)
-        out = []
-        for pts in parts:
-            out.append([((x * c - y * s) * o["scale"] + o["ox"], (x * s + y * c) * o["scale"] + o["oy"]) for x, y in pts])
-        return out
 
     def _to_screen(self, x, y):
         cx, cy, R = self._geo()
@@ -161,8 +299,7 @@ class GamutComp(ui.Comp):
 
     def _pos_hs(self, pos):
         cx, cy, R = self._geo()
-        dx, dy = (pos.x() - cx) / R, -(pos.y() - cy) / R
-        return dx, dy
+        return (pos.x() - cx) / R, -(pos.y() - cy) / R
 
     def _hs_pos(self):
         a = ui.hue_angle(self.h)
@@ -183,11 +320,32 @@ class GamutComp(ui.Comp):
             maskp.addPolygon(poly)
             maskp.closeSubpath()
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(15, 18, 28, 185))
+        p.setBrush(QColor(15, 18, 28, 120 if self.edit is not None else 185))
         p.drawPath(circle.subtracted(maskp))
         p.setBrush(Qt.NoBrush)
         p.setPen(QPen(QColor(255, 255, 255, 200), 1.6))
         p.drawPath(maskp.intersected(circle))
+        if self.edit is not None:
+            pts = [self._to_screen(x, y) for x, y in self.edit]
+            if 0 < len(pts) < 3:
+                p.setPen(QPen(QColor(255, 255, 255, 200), 1.4, Qt.DashLine))
+                for a, b in zip(pts, pts[1:]):
+                    p.drawLine(a, b)
+            for i, pt in enumerate(pts):
+                p.setPen(QPen(QColor(0, 0, 0, 140), 3))
+                p.setBrush(ui.ACCENT if i == self._edit_drag else QColor("#F4F6FB"))
+                p.drawEllipse(pt, 5, 5)
+            f = p.font()
+            f.setPointSizeF(max(7.0, f.pointSizeF() - 1))
+            p.setFont(f)
+            tip = QRectF(4, self.height() - 36, self.width() - 8, 34)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(10, 13, 22, 215))
+            p.drawRoundedRect(tip, 8, 8)
+            p.setPen(QColor("white"))
+            p.drawText(tip.adjusted(6, 0, -6, 0), Qt.AlignCenter | Qt.TextWordWrap,
+                       "ЛКМ — точка / тянуть точку · ПКМ — удалить точку · Enter — сохранить · Esc — отмена")
+            return
         x, y = self._hs_pos()
         _marker(p, self._to_screen(x, y))
 
@@ -196,7 +354,7 @@ class GamutComp(ui.Comp):
         return any(poly.containsPoint(pt, Qt.OddEvenFill) for poly in self._qpolys())
 
     def _clamp_to_mask(self, x, y):
-        if self._inside(x, y):
+        if self._inside(x, y) or not self._polys():
             return x, y
         best, bd = (x, y), 1e9
         for pts in self._polys():
@@ -212,14 +370,45 @@ class GamutComp(ui.Comp):
         return best
 
     def mousePressEvent(self, e):
+        pos = e.position()
+        if self.edit is not None:
+            i = self._edit_hit(pos)
+            if e.button() == Qt.RightButton:
+                if i >= 0:
+                    self.edit.pop(i)
+            elif i >= 0:
+                self._edit_drag = i
+            else:
+                x, y = self._pos_hs(pos)
+                r = math.hypot(x, y)
+                if r > 1.0:
+                    x, y = x / r, y / r
+                k = self._edit_insert_index(x, y)
+                self.edit.insert(k, (x, y))
+                self._edit_drag = k
+            self.update()
+            return
         self._drag = "move" if e.button() == Qt.RightButton else "pick"
-        self._last = e.position()
-        self._move(e.position(), False)
+        self._last = pos
+        self._move(pos, False)
 
     def mouseMoveEvent(self, e):
+        if self.edit is not None:
+            if self._edit_drag >= 0:
+                x, y = self._pos_hs(e.position())
+                r = math.hypot(x, y)
+                if r > 1.0:
+                    x, y = x / r, y / r
+                self.edit[self._edit_drag] = (x, y)
+                self.update()
+            return
         self._move(e.position(), False)
 
     def mouseReleaseEvent(self, e):
+        if self.edit is not None:
+            self._edit_drag = -1
+            self.update()
+            return
         self._move(e.position(), True)
         self._drag = None
 
@@ -247,6 +436,9 @@ class GamutComp(ui.Comp):
         self.update()
 
     def wheelEvent(self, e):
+        if self.edit is not None:
+            e.accept()
+            return
         d = (e.angleDelta().y() or e.angleDelta().x()) / 120
         if e.modifiers() & Qt.ControlModifier:
             self.opts["scale"] = min(1.6, max(0.3, self.opts["scale"] * (1.05 ** d)))
@@ -256,6 +448,8 @@ class GamutComp(ui.Comp):
             super().wheelEvent(e)
 
     def adjust(self, step, pos):
+        if self.edit is not None:
+            return True
         self.opts["rot"] = (self.opts["rot"] + step * 3) % 360
         self.update()
         return True
@@ -358,7 +552,7 @@ class MixerComp(ui.Comp):
         o.setdefault("a", None)      # None — живой основной цвет
         o.setdefault("b", None)      # None — живой фоновый цвет
         o.setdefault("mid", None)
-        self.state.changed.connect(lambda _: self.update())
+        self.state.changed.connect(self._repaint)
         self.setToolTip("ЛКМ по краю — взять текущий цвет. ПКМ по краю — меню. Колёсико — число шагов")
 
     def heightFor(self, w):
@@ -474,7 +668,7 @@ class LightShadowComp(ui.Comp):
         self.opts.setdefault("shift", 1.0)
         self.opts.setdefault("light", "neutral")
         self.opts.setdefault("custom", None)      # [свет, тень]
-        self.state.changed.connect(lambda _: self.update())
+        self.state.changed.connect(self._repaint)
         self.setToolTip("Клик по заголовку — цвет освещения. Колёсико — сила влияния света")
 
     def heightFor(self, w):
@@ -580,7 +774,7 @@ class ValueComp(ui.Comp):
     def __init__(self, app, opts=None):
         super().__init__(app, opts)
         self.opts.setdefault("steps", 7)
-        self.state.changed.connect(lambda _: self.update())
+        self.state.changed.connect(self._repaint)
         self.setToolTip("Клик по ступени — тот же оттенок в этой яркости. Колёсико — 5 / 7 / 9 ступеней")
 
     def heightFor(self, w):
