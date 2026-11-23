@@ -605,14 +605,17 @@ class WheelComp(Comp):
 
 
 class LumaComp(Comp):
-    """Luma-Based Palette: срез гаммы sRGB на текущей яркости L* + слайдер яркости."""
+    """Luma-Based Palette: срез гаммы sRGB на текущей светлоте (Rec.601 luma или CIE L*) + слайдер светлоты."""
     KEY = "luma"
-    AB = 118
     NEAR = 8
+
+    @property
+    def AB(self):
+        return 118 if LUMA_METRIC["value"] == "cielab" else 100
 
     def adjust(self, step, pos):
         self.L = min(100, max(0, self.L + step))
-        self.state.set_color(lch_in_gamut(self.L, self.C, self.H), self, True)
+        self.state.set_color(luma_lch_in_gamut(self.L, self.C, self.H), self, True)
         self.update()
         return True
 
@@ -635,7 +638,7 @@ class LumaComp(Comp):
         self.btn.move(self.width() - 25, self.height() - 26)
 
     def _lch(self):
-        L, a, b = rgb2lab(np.array(self.state.color()))
+        L, a, b = luma_lab(np.array(self.state.color()))
         return float(L), float(math.hypot(a, b)), float(math.degrees(math.atan2(b, a)) % 360)
 
     def _toggle(self):
@@ -666,7 +669,7 @@ class LumaComp(Comp):
         if self.view == "full":
             n = 96
             Cf = max(self.C, 30)
-            key = ("full", round(Cf / 3))
+            key = ("full", round(Cf / 3), LUMA_METRIC["value"])
             if key != self._img_key:
                 Hs = np.linspace(0, 360, n)
                 Ls = np.linspace(100, 0, n)
@@ -675,19 +678,19 @@ class LumaComp(Comp):
                 lo, hi = np.zeros_like(Hg), np.full_like(Hg, Cf)
                 for _ in range(10):
                     mid = (lo + hi) / 2
-                    rgb = lab2rgb(np.stack([Lg, mid * np.cos(hr), mid * np.sin(hr)], -1))
+                    rgb = luma_lab2rgb(np.stack([Lg, mid * np.cos(hr), mid * np.sin(hr)], -1))
                     ok = np.all((rgb > -1e-4) & (rgb < 1 + 1e-4), -1)
                     lo, hi = np.where(ok, mid, lo), np.where(ok, hi, mid)
-                rgb = lab2rgb(np.stack([Lg, lo * np.cos(hr), lo * np.sin(hr)], -1))
+                rgb = luma_lab2rgb(np.stack([Lg, lo * np.cos(hr), lo * np.sin(hr)], -1))
                 self._img = np_to_qimage(np.clip(rgb, 0, 1))
                 self._img_key = key
         else:
             n = 120
-            key = ("foc", round(self.L, 1))
+            key = ("foc", round(self.L, 1), LUMA_METRIC["value"])
             if key != self._img_key:
                 ab = np.linspace(-self.AB, self.AB, n)
                 A, B = np.meshgrid(ab, ab[::-1])
-                rgb = lab2rgb(np.stack([np.full_like(A, self.L), A, B], -1))
+                rgb = luma_lab2rgb(np.stack([np.full_like(A, self.L), A, B], -1))
                 over = np.maximum(rgb.max(-1) - 1, -rgb.min(-1))
                 alpha = np.clip(1 - over * 30, 0, 1)
                 rgb = np.clip(rgb, 0, 1)
@@ -724,10 +727,10 @@ class LumaComp(Comp):
         p.drawEllipse(m, 6, 6)
         p.setPen(QPen(QColor("#F4F6FB"), 1.8))
         p.drawEllipse(m, 6, 6)
-        stops = [to_qcolor(lch_in_gamut(Li, self.C, self.H)) for Li in range(0, 101, 10)]
+        stops = [to_qcolor(luma_lch_in_gamut(Li, self.C, self.H)) for Li in range(0, 101, 10)]
         sr = self._slider_rect()
         if self.view == "focused":
-            # подсвеченный диапазон близкой яркости (±NEAR L*)
+            # подсвеченный диапазон близкой светлоты (±NEAR)
             a = max(0, self.L - self.NEAR) / 100
             b = min(100, self.L + self.NEAR) / 100
             band = QRectF(sr.left() + a * sr.width() - 2, sr.top() - 5, (b - a) * sr.width() + 4, sr.height() + 10)
@@ -776,7 +779,7 @@ class LumaComp(Comp):
             else:
                 a, b = fx * 2 * self.AB - self.AB, self.AB - fy * 2 * self.AB
                 self.C, self.H = math.hypot(a, b), math.degrees(math.atan2(b, a)) % 360
-        rgb = lch_in_gamut(self.L, self.C, self.H)
+        rgb = luma_lch_in_gamut(self.L, self.C, self.H)
         self.state.set_color(rgb, self, commit)
         self.update()
 
@@ -1145,6 +1148,7 @@ class FloatingPanel(QWidget):
         self.state.csp = CSPLink(self.state)
         self.cfg = self._load()
         apply_theme(self.cfg.get("theme", "dark"))
+        LUMA_METRIC["value"] = self.cfg.get("luma_metric", "rec601")
         self._apply_state_cfg()
         self.layouts = (self.cfg.get("layouts") or [
             {"name": "1", "items": [{"key": "wheel"}, {"key": "history"}]},
@@ -1500,6 +1504,7 @@ class FloatingPanel(QWidget):
             self.mode, self.side = v["mode"], v["side"]
             self.width_px, self.max_len = v["width_px"], v["max_len"]
             apply_theme(v["theme"])
+            LUMA_METRIC["value"] = v["luma_metric"]
             self._restyle()
             self._configure_keys()
             self._sync_pin_btn()
@@ -2187,6 +2192,10 @@ class SettingsDialog(DarkDialog):
         v.addWidget(self._head("Тема"))
         self.theme = self._combo([("dark", "Тёмная"), ("light", "Светлая")], self.cfg.get("theme", "dark"))
         v.addWidget(self.theme)
+        v.addWidget(self._head("Светлота для Luma-палитры, Тона и Контраста"))
+        self.metric = self._combo([("rec601", "Luma Rec.601 — как серый режим CSP / Photoshop"),
+                                   ("cielab", "CIE L* — по восприятию глаза")], self.cfg.get("luma_metric", "rec601"))
+        v.addWidget(self.metric)
         v.addWidget(self._head("Ширина панели"))
         self.width_s, wl = self._slider(200, 460, self.panel.width_px, lambda x: f"{x} px")
         v.addLayout(wl)
@@ -2305,6 +2314,7 @@ class SettingsDialog(DarkDialog):
                 "bindings": {a: c for a, c in self.bindings.items() if c},
                 "suppress_keys": self.suppress.isChecked(), "middle_click": self.middle.isChecked(),
                 "theme": self.theme.currentData(), "width_px": self.width_s.value(),
+                "luma_metric": self.metric.currentData(),
                 "max_len": 0 if ml < 200 else ml,
                 "profiles": self._profiles(), "autostart": self.autostart.isChecked(),
                 "update_check": self.updates.isChecked()}

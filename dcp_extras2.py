@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QMenu
 
 import dcp_app as ui
 from dcp_core import (rgb2lab, to_qcolor, to_hex, from_hex, clip3, rgb2oklab, oklab2rgb, oklch_in_gamut, rgb2oklch,
-                      lch_in_gamut, _lin)
+                      lch_in_gamut, _lin, luma_of, LUMA_METRIC)
 from dcp_extras import _chip, _label
 
 
@@ -157,7 +157,7 @@ class ContrastComp(ui.Comp):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         fg, bg = self.state.fg, self.state.bg
-        L1, L2 = float(rgb2lab(np.array(fg))[0]), float(rgb2lab(np.array(bg))[0])
+        L1, L2 = luma_of(fg), luma_of(bg)
         dL = abs(L1 - L2)
         y1, y2 = _rel_lum(fg), _rel_lum(bg)
         ratio = (max(y1, y2) + 0.05) / (min(y1, y2) + 0.05)
@@ -176,7 +176,8 @@ class ContrastComp(ui.Comp):
         p.drawRoundedRect(box, 8, 8)
         p.setBrush(to_qcolor(fg))
         p.drawEllipse(QRectF(14, 14, 30, 38))
-        _label(p, QRectF(68, 2, self.width() - 68, 18), f"Контраст ΔL* {dL:.0f}  ·  {ratio:.1f}:1", ui.TXT, bold=True)
+        tag = "ΔL*" if LUMA_METRIC["value"] == "cielab" else "ΔLuma"
+        _label(p, QRectF(68, 2, self.width() - 68, 18), f"Контраст {tag} {dL:.0f}  ·  {ratio:.1f}:1", ui.TXT, bold=True)
         _label(p, QRectF(68, 20, self.width() - 68, 16), verdict, col)
         bar = QRectF(68, 44, self.width() - 72, 8)
         g_stops = [to_qcolor(lch_in_gamut(k * 10, 0, 0)) for k in range(11)]

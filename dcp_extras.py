@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QWidget, QMenu, QApplication, QLabel, QVBoxLayout,
 import dcp_app as ui
 from dcp_core import (APP_VERSION, GITHUB_REPO, APP_DIR, CONFIG_PATH, hsv2rgb, rgb2lab, lch_in_gamut, to_qcolor,
                       to_hex, from_hex, clip3, np_to_qimage, rgb2oklab, oklab2rgb, oklch_in_gamut, rgb2oklch,
-                      extract_colors, qimage_rgb)
+                      extract_colors, qimage_rgb, luma_lch_in_gamut, LUMA_METRIC)
 import colorsys
 
 
@@ -781,7 +781,8 @@ class ValueComp(ui.Comp):
         return 54
 
     def _lch(self):
-        L, a, b = rgb2lab(np.array(self.state.color()))
+        from dcp_core import luma_lab
+        L, a, b = luma_lab(np.array(self.state.color()))
         return float(L), math.hypot(a, b), math.degrees(math.atan2(b, a))
 
     def _cells(self):
@@ -796,13 +797,13 @@ class ValueComp(ui.Comp):
         L, C, H = self._lch()
         n = self.opts["steps"]
         idx = min(n - 1, int(L / 100 * n))
-        g = lch_in_gamut(L, 0, 0)
+        g = luma_lch_in_gamut(L, 0, 0)
         _chip(p, QRectF(0, 4, 24, 46), to_qcolor(self.state.color()), rad=6)
         _chip(p, QRectF(28, 4, 24, 46), to_qcolor(g), rad=6)
-        _label(p, QRectF(58, 2, self.width() - 58, 20), f"L* {L:.0f}  ·  ступень {idx + 1} из {n}", ui.TXT, bold=True)
+        _label(p, QRectF(58, 2, self.width() - 58, 20), f"{'L*' if LUMA_METRIC['value'] == 'cielab' else 'Luma'} {L:.0f}  ·  ступень {idx + 1} из {n}", ui.TXT, bold=True)
         for i, r in enumerate(self._cells()):
             Li = (i + 0.5) / n * 100
-            _chip(p, r, to_qcolor(lch_in_gamut(Li, 0, 0)), active=(i == idx), rad=4)
+            _chip(p, r, to_qcolor(luma_lch_in_gamut(Li, 0, 0)), active=(i == idx), rad=4)
         x = 58 + L / 100 * (self.width() - 58)
         p.setPen(QPen(ui.ACCENT, 2))
         p.drawLine(QPointF(x, 22), QPointF(x, 52))
@@ -812,7 +813,7 @@ class ValueComp(ui.Comp):
         n = self.opts["steps"]
         for i, r in enumerate(self._cells()):
             if r.contains(e.position()):
-                self.state.set_color(lch_in_gamut((i + 0.5) / n * 100, C, H), self)
+                self.state.set_color(luma_lch_in_gamut((i + 0.5) / n * 100, C, H), self)
 
     def adjust(self, step, pos):
         order = [5, 7, 9]

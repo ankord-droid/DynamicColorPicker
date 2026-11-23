@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QTimer
 from PySide6.QtGui import QColor, QImage, QGuiApplication
 import csp_companion as cspc
 
-APP_VERSION = "2.3.1"
+APP_VERSION = "2.3.2"
 GITHUB_REPO = "ankord-droid/DynamicColorPicker"
 
 DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".dynamic_color_picker")
@@ -240,6 +240,45 @@ def space_to_rgb(space, v):
         return clip3(lab2rgb(np.array(v)))
     L, C, H = v
     return clip3(lab2rgb(np.array([L, C * math.cos(math.radians(H)), C * math.sin(math.radians(H))])))
+
+
+# ----- «Светлота» для Luma-палитры, Тона и Контраста: Rec.601 luma (как серый режим CSP/Photoshop) или CIE L*
+LUMA_METRIC = {"value": "rec601"}
+_Y601 = np.array([0.299, 0.587, 0.114])
+
+
+def luma_lab(rgb, metric=None):
+    """rgb -> (L 0..100, a, b). rec601: L = Y'·100, a/b — оси Cb/Cr (×200); cielab: CIE Lab."""
+    if (metric or LUMA_METRIC["value"]) == "cielab":
+        return rgb2lab(rgb)
+    rgb = np.asarray(rgb, float)
+    Y = rgb @ _Y601
+    return np.stack([Y * 100, (rgb[..., 2] - Y) / 1.772 * 200, (rgb[..., 0] - Y) / 1.402 * 200], -1)
+
+
+def luma_lab2rgb(lab, metric=None):
+    if (metric or LUMA_METRIC["value"]) == "cielab":
+        return lab2rgb(lab)
+    lab = np.asarray(lab, float)
+    Y, cb, cr = lab[..., 0] / 100, lab[..., 1] / 200, lab[..., 2] / 200
+    return np.stack([Y + 1.402 * cr, Y - 0.344136 * cb - 0.714136 * cr, Y + 1.772 * cb], -1)
+
+
+def luma_of(rgb, metric=None):
+    return float(luma_lab(np.array(rgb, float), metric)[0])
+
+
+def luma_lch_in_gamut(L, C, H, metric=None):
+    """Цвет с заданной светлотой (в выбранной метрике), оттенком H и хромой до C — с подрезкой хромы."""
+    hr = math.radians(H)
+    f = lambda c: luma_lab2rgb(np.array([L, c * math.cos(hr), c * math.sin(hr)]), metric)
+    if in_gamut(f(C)):
+        return clip3(f(C))
+    lo, hi = 0.0, C
+    for _ in range(16):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if in_gamut(f(mid)) else (lo, mid)
+    return clip3(f(lo))
 
 
 def lch_in_gamut(L, C, H):
