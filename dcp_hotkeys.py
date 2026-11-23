@@ -37,7 +37,12 @@ ACTIONS = [
     ("brush_window", "Окно кисти: показать / скрыть"),
     ("brush_size_up", "Размер кисти +"), ("brush_size_down", "Размер кисти −"),
     ("brush_alpha_up", "Непрозрачность кисти +"), ("brush_alpha_down", "Непрозрачность кисти −"),
-]
+    ("undo", "CSP: отменить"), ("redo", "CSP: повторить"),
+    ("nav_ZoomIn", "Холст: увеличить"), ("nav_ZoomOut", "Холст: уменьшить"),
+    ("nav_RotateLeft", "Холст: повернуть влево"), ("nav_RotateRight", "Холст: повернуть вправо"),
+    ("nav_Rotate0", "Холст: сбросить поворот"), ("nav_ReverseHorz", "Холст: отразить по горизонтали"),
+    ("nav_Fitting", "Холст: вписать в окно"), ("nav_PixelSize", "Холст: 100%"),
+] + [(f"quick_{i}", f"Быстрый доступ CSP: кнопка {i}") for i in range(1, 13)]
 DEFAULT_BINDINGS = {"call": "vk17+vk18+vk67"}   # Ctrl+Alt+C
 
 MOD_VK = {160: 16, 161: 16, 162: 17, 163: 17, 164: 18, 165: 18, 91: 91, 92: 91}

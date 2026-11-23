@@ -122,6 +122,7 @@ class CompanionWorker(QThread):
     status = Signal(str, bool)          # текст, подключено
     colorReceived = Signal(dict)        # {"main":(h,s,v), "sub":(h,s,v), "index":0|1, "transparent":bool}
     toolReceived = Signal(dict)         # {"size": px, "alpha": %, "size_ok": bool, "alpha_ok": bool, "unit": str}
+    replied = Signal(str, object)       # (метка запроса, detail ответа) для request()
     authenticated = Signal(dict)        # данные сессии для сохранения
 
     POLL = 0.2
@@ -137,6 +138,7 @@ class CompanionWorker(QThread):
         self._pending = None
         self._pending_size = None
         self._pending_alpha = None
+        self._requests = []
         self._tool_quiet = 0.0
         self._tool = {"size": None, "alpha": None, "size_ok": False, "alpha_ok": False, "unit": "px"}
         self._lock = threading.Lock()
@@ -144,6 +146,11 @@ class CompanionWorker(QThread):
         self._quiet_until = 0.0
 
     # --- API из GUI-потока
+    def request(self, cmd, detail="", tag=None):
+        """Произвольная команда Companion (DoQuickAccess, DoNavigator, GetQuickAccessData…). Ответ — replied(tag, detail)."""
+        with self._lock:
+            self._requests.append((cmd, detail if isinstance(detail, str) else json.dumps(detail), tag))
+
     def set_brush_size(self, px):
         with self._lock:
             self._pending_size = float(px)
@@ -250,6 +257,15 @@ class CompanionWorker(QThread):
                     pending, self._pending = self._pending, None
                     size, self._pending_size = self._pending_size, None
                     alpha, self._pending_alpha = self._pending_alpha, None
+                    reqs, self._requests = self._requests, []
+                for cmd, det, tag in reqs:
+                    try:
+                        r = self._send(cmd, det, timeout=6)
+                        if tag:
+                            self.replied.emit(tag, r.get("detail"))
+                    except TimeoutError:
+                        if tag:
+                            self.replied.emit(tag, None)
                 if pending:
                     self._quiet_until = now + 0.35     # не принимать «эхо» старого цвета
                     self._send("SetCurrentColor", json.dumps(pending))

@@ -27,7 +27,7 @@ jobs:
       - name: Smoke test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -c "import dcp_app, dcp_extras, dcp_extras2, dcp_refboard, dcp_instance, dcp_tour, dcp_brush, csp_companion, dcp_formats, dcp_hotkeys; print('ok', dcp_app.APP_VERSION)"
+        run: python -c "import dcp_app, dcp_extras, dcp_extras2, dcp_refboard, dcp_instance, dcp_tour, dcp_brush, dcp_control, csp_companion, dcp_formats, dcp_hotkeys; print('ok', dcp_app.APP_VERSION)"
 
       - name: Version
         id: ver
@@ -49,6 +49,7 @@ jobs:
             --hidden-import dcp_instance `
             --hidden-import dcp_tour `
             --hidden-import dcp_brush `
+            --hidden-import dcp_control `
             --hidden-import dcp_extras `
             --hidden-import dcp_extras2 `
             --hidden-import dcp_refboard `

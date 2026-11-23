@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QTimer
 from PySide6.QtGui import QColor, QImage, QGuiApplication
 import csp_companion as cspc
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 GITHUB_REPO = "ankord-droid/DynamicColorPicker"
 
 DEFAULT_DIR = os.path.join(os.path.expanduser("~"), ".dynamic_color_picker")
@@ -514,6 +514,7 @@ class CSPLink(QObject):
     """Связь ColorState <-> CSP Companion Mode."""
     statusChanged = Signal(str, bool)
     toolChanged = Signal(dict)          # размер и прозрачность кисти из CSP
+    quickChanged = Signal()             # набор Quick Access или иконки обновились
     SRC = "csp"
 
     def __init__(self, state):
@@ -569,6 +570,7 @@ class CSPLink(QObject):
         w.status.connect(self._set_status)
         w.colorReceived.connect(self._on_csp_color)
         w.toolReceived.connect(self._on_tool)
+        w.replied.connect(self._on_reply)
         w.authenticated.connect(lambda sess: cspc.save_session(APP_DIR, sess))
         self.worker = w
         w.start()
@@ -582,6 +584,84 @@ class CSPLink(QObject):
         self._set_status("Не подключено", False)
 
     tool = {"size": None, "alpha": None, "size_ok": False, "alpha_ok": False, "unit": "px"}
+    qa_sets = []          # [{"name":…, "items":[{id…, "name":…}, …]}, …]
+    qa_current = 0
+    icons = {}            # ключ элемента -> QImage
+
+    # ---- Quick Access / навигатор холста (DoQuickAccess, DoNavigator)
+    @staticmethod
+    def item_key(it):
+        return "|".join(str(it.get(k, "")) for k in ("ItemIDType", "ItemIDCommandType", "ItemIDCommandName",
+                                                     "ItemIDToolUuid"))
+
+    def _req(self, cmd, detail="", tag=None):
+        if self.worker and self.connected:
+            self.worker.request(cmd, detail, tag)
+            return True
+        return False
+
+    def refresh_quick(self):
+        self._req("GetQuickAccessData", "", "qa")
+
+    def do_item(self, it):
+        t = it.get("ItemIDType")
+        if t == "Tool":
+            return self._req("DoQuickAccess", {"ItemType": "Tool", "ItemToolUuid": it.get("ItemIDToolUuid", "")})
+        if t == "Command":
+            return self._req("DoQuickAccess", {"ItemType": "Command", "ItemCommandType": it.get("ItemIDCommandType", ""),
+                                               "ItemCommandName": it.get("ItemIDCommandName", "")})
+        return False
+
+    def command(self, name, ctype="basiccommand"):
+        return self._req("DoQuickAccess", {"ItemType": "Command", "ItemCommandType": ctype, "ItemCommandName": name})
+
+    def navigator(self, cmd):
+        return self._req("DoNavigator", {"CommandType": cmd})
+
+    def quick_slot(self, n):
+        """n-я кнопка текущего набора Quick Access (с 1)."""
+        if 0 <= self.qa_current < len(self.qa_sets):
+            items = self.qa_sets[self.qa_current]["items"]
+            if 1 <= n <= len(items):
+                return self.do_item(items[n - 1])
+        return False
+
+    def _on_reply(self, tag, d):
+        import logging
+        if tag == "qa":
+            if not isinstance(d, dict):
+                logging.getLogger("dcp").warning("CSP: GetQuickAccessData — нет данных")
+                return
+            sets = []
+            for st in d.get("ToolBarData", []) or []:
+                items = []
+                for row in st.get("ItemSet", []) or []:
+                    for col in row or []:
+                        for it in col or []:
+                            if it.get("ItemIDType") in ("Tool", "Command"):
+                                items.append(dict(it, name=it.get("ItemShowName", "")))
+                sets.append({"name": st.get("ItemSetName", f"Набор {len(sets) + 1}"), "items": items})
+            self.qa_sets = sets
+            vi = d.get("ToolBarViewInfo", {}) or {}
+            self.qa_current = min(max(0, int(vi.get("ViewInfoCurrentSetIndex", 0))), max(0, len(sets) - 1))
+            logging.getLogger("dcp").info("CSP: Quick Access — наборов %d", len(sets))
+            self.quickChanged.emit()
+            for stt in sets:
+                for it in stt["items"]:
+                    k = self.item_key(it)
+                    if k not in self.icons:
+                        self._req("GetQuickAccessItemIcon", {key: it.get(key, "") for key in
+                                  ("ItemIDType", "ItemIDCommandType", "ItemIDCommandName", "ItemIDToolUuid")},
+                                  "icon:" + k)
+        elif tag.startswith("icon:") and isinstance(d, dict):
+            w, h, hx = d.get("ItemIconWidth", 0), d.get("ItemIconHeight", 0), d.get("ItemIconPixelDataRGBAHexString", "")
+            if w and h and hx:
+                try:
+                    raw = bytes.fromhex(hx)[: w * h * 4]
+                    self.icons[tag[5:]] = QImage(raw, w, h, w * 4, QImage.Format_RGBA8888).copy()
+                    self.quickChanged.emit()
+                except ValueError:
+                    pass
 
     def _on_tool(self, d):
         self.tool = d
@@ -598,8 +678,11 @@ class CSPLink(QObject):
             self.worker.set_alpha(pct)
 
     def _set_status(self, text, ok):
+        was = self.connected
         self.connected, self.text = ok, text
         self.statusChanged.emit(text, ok)
+        if ok and not was:
+            QTimer.singleShot(400, self.refresh_quick)
 
     # --- цвет
     def _on_csp_color(self, d):

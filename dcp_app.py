@@ -1864,6 +1864,12 @@ class FloatingPanel(QWidget):
             self.scan_canvas()
         elif act == "ref_board":
             self.toggle_refboard()
+        elif act in ("undo", "redo"):
+            self.state.csp.command(act)
+        elif act.startswith("nav_"):
+            self.state.csp.navigator(act[4:])
+        elif act.startswith("quick_"):
+            self.state.csp.quick_slot(int(act[6:]))
         elif act == "brush_window":
             self.toggle_brush()
         elif act in ("brush_size_up", "brush_size_down"):
@@ -2926,6 +2932,7 @@ def main():
 import dcp_extras  # noqa: E402,F401  — регистрирует дополнительные компоненты
 import dcp_extras2  # noqa: E402,F401
 import dcp_refboard  # noqa: E402,F401
+import dcp_control  # noqa: E402,F401
 
 if __name__ == "__main__":
     main()
